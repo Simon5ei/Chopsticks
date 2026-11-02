@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {registerConsole} from './console.mjs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {createRuntime,readJSON} from './runtime.mjs';
@@ -14,7 +15,8 @@ export async function apply(ctx){
  const file=process.env.CHOPSTICKS_CONFIG;if(!file)throw Error('CHOPSTICKS_CONFIG must point to an external config');
  const config=readJSON(file);if(!config.stateDir||!config.fishHome)throw Error('Missing external Chopsticks data roots');
  const req=hostRequire(),host=req('@deepseek-ai/dsh-tools'),mcp=req('@deepseek-ai/dsh-mcp-client');
- const runtime=await createRuntime({config,controller:ctx.sessionController,getAgent:id=>ctx.get('agents')?.get(id),...(config.validation?{adapterFactory:validationAdapter}:{})});
+ const runtime=await createRuntime({config,logger:ctx.logger,controller:ctx.sessionController,getAgent:id=>ctx.get('agents')?.get(id),...(config.validation?{adapterFactory:validationAdapter}:{})});
+ registerConsole(ctx,runtime);
  const memory=createMemory({fishHome:config.fishHome,state:runtime.state,store:runtime.store});
  const bili=createBiliService({fishHome:config.fishHome});const disposers=[];
  const str=(description,required=false)=>({type:'string',description,...required?{required:true}:{}});

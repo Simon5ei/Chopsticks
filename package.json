@@ -1,11 +1,41 @@
 {
-  "name":"chopsticks", "version":"0.1.0", "private":true, "type":"module",
-  "description":"筷子：让大肥鱼更方便地吃白饭。持续感知、统一经历、事件驱动的 DSH Agent。",
-  "engines":{"node":">=24.0.0"},
-  "main":"./host/index.mjs",
-  "exports":{".":"./host/index.mjs","./guard":"./host/guard.mjs"},
-  "dsh":{"bundle":{"patch":["./presets/runtime.patch.yml"]}},
-  "scripts":{"test":"node --test tests/*.test.mjs","test:audit":"node --test tests/*.test.mjs"},
-  "dependencies":{"@modelcontextprotocol/sdk":"^1.30.0","zod":"^4.4.3","js-yaml":"^4.3.2","ws":"^8.18.0"},
-  "license":"MIT"
+  "name": "chopsticks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "筷子：让大肥鱼更方便地吃白饭。持续感知、统一经历、事件驱动的 DSH Agent。",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "./host/index.mjs",
+  "exports": {
+    ".": "./host/index.mjs",
+    "./guard": "./host/guard.mjs",
+    "./client": "./console/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./presets/runtime.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:audit": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3",
+    "js-yaml": "^4.3.2",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
 }

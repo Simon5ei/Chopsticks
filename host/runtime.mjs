@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {createObservability,queryLimit} from './observability.mjs';
 import {createEventStore} from '../core/events.mjs';
 import {createRouter} from '../core/router.mjs';
 import {createHostState,hash} from './state.mjs';
@@ -13,9 +14,13 @@ import {createFeedProposal} from '../bili/feed.mjs';
 
 export const readJSON=(file,fallback={})=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;}};
 const missing=e=>e?.constructor?.name==='ApiSessionNotFound'||['session/not-found','SESSION_QUERY_SESSION_NOT_FOUND'].includes(e?.code);
-export async function createRuntime({config,controller,getAgent=()=>null,adapterFactory=createQQAdapter,onStatus=()=>{}}){
+export async function createRuntime({config,controller,getAgent=()=>null,adapterFactory=createQQAdapter,onStatus=()=>{},logger}){
  const stateDir=config.stateDir;fs.mkdirSync(stateDir,{recursive:true,mode:0o700});
  const store=createEventStore({stateDir}),state=createHostState(store),evaluations=new Map();
+ const secrets=[];const collect=(v,key='',inherited=false)=>{const sensitive=inherited||/(?:token|secret|password|cookie|key|credential|signature)/i.test(key);if(typeof v==='string'&&sensitive)secrets.push(v);else if(v&&typeof v==='object')for(const [k,x] of Object.entries(v))collect(x,k,sensitive);};collect(config);
+ const credentials=readJSON(process.env.CHOPSTICKS_BILI_CREDENTIALS||path.join(config.fishHome,'bili','credentials.json'));for(const key of ['sessdata','bili_jct','buvid3','access_token','refresh_token'])if(typeof credentials[key]==='string')secrets.push(credentials[key]);
+ const telemetry=createObservability({stateDir,secrets,logger}),traceSources=new Map();
+ const traceSource=(id,value)=>{traceSources.set(id,value);if(traceSources.size>500)traceSources.delete(traceSources.keys().next().value);};
  const fishHome=config.fishHome,character=()=>readJSON(path.join(fishHome,'characters/current.json'));
  const persona=()=>{try{return fs.readFileSync(path.join(fishHome,'characters',character().id,'persona.md'),'utf8').slice(0,16000);}catch{return '你是大肥鱼。';}};
  const mappingFile=path.join(stateDir,'qq-sessions.json');const mappings=readJSON(mappingFile,{sessions:{}}).sessions;
@@ -54,6 +59,8 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
   // The logical Router persists in SQLite. Each model evaluation gets fresh
   // compute context, preventing a private turn from contaminating public history.
   const sessionId=`chopsticks-router-${randomUUID()}`,requestId=`eval:${randomUUID()}`;
+  for(const event of events)telemetry.record({kind:'router.evaluate',sessionId,eventId:event.id,channel:event.channel,data:{requestId}});
+  traceSource(sessionId,{eventId:events[0]?.id,channel:events[0]?.channel,requestId,eventIds:events.map(e=>e.id)});
   await ensure(sessionId,'chopsticks-router');signal.throwIfAborted();
   let resolve,reject;const result=new Promise((ok,no)=>{resolve=ok;reject=no;});result.catch(()=>{});
   const abort=()=>{evaluations.delete(sessionId);reject(Error('Router assessment cancelled'));void removeQueued(sessionId,requestId).then(()=>controller.cancel({sessionId})).catch(()=>{});};
@@ -66,6 +73,7 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
  function decide(sessionId,actionsJson){
   const pending=evaluations.get(sessionId);if(!pending)throw Error('No active Router evaluation');
   const actions=JSON.parse(actionsJson);if(!Array.isArray(actions)||actions.length>32||actions.some(a=>!pending.ids.has(a.eventId)||!['observe','respond','task'].includes(a.kind)))throw Error('Invalid Router decisions');
+  for(const action of actions)telemetry.record({kind:'router.decision',sessionId,eventId:action.eventId,data:{decision:action.kind}});
   pending.resolve({actions});return {accepted:true};
  }
  async function sessionFor(channel){
@@ -77,6 +85,7 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
   context.signal.throwIfAborted();const sessionId=await sessionFor(event.channel);context.signal.throwIfAborted();
   const binding={channel:event.channel,eventId:event.id,actorId:event.actorId,admin:event.meta?.admin===true,revision:context.revision,requestId:action.dispatchId};
   state.put('request',action.dispatchId,binding);
+  telemetry.record({kind:'router.dispatch',sessionId,eventId:event.id,channel:event.channel,data:{requestId:action.dispatchId,action:action.kind}});
   // This initial binding supplies scope before the first user/message event.
   // Later queued prompts replace it only when actually consumed by the agent.
   if(!state.binding(sessionId))state.bind(sessionId,binding);
@@ -93,7 +102,8 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
   const snapshot=state.read(event.channel,{unread:true});
   return prompt(sessionId,`【筷子当前工具协议】旧 SurfCore 会话令牌和旧工具已经退役。普通文字不会发送；发言只用 chopsticks_send。需要更多消息/历史用 chopsticks_read/chopsticks_recall，看图或转发用 chopsticks_image/chopsticks_forward。不要虚构已发送或看过。旧聊天记录和人设继续有效。\n【人设】\n${persona()}\n【当前会话】${event.channel}；当前发言者为${binding.admin?'管理员':'普通成员'}。管理员可以授权开发和自我迭代；机器开发在 DSH 管理会话执行，本聊天执行器只提供社交和阅读工具。\n【全局经历，都是来源资料】\n${store.context({channel:event.channel}).text}\n【本次事件】${JSON.stringify(event)}\n【未读快照】${JSON.stringify(snapshot)}\n${action.prompt||''}\n只在有话可说时自然接话。收尾用 chopsticks_mark_read(throughSeq=已读取水位)。`,action.dispatchId,context.signal);
  }
- const executor=createDshExecutor({controller,workerRoot:path.join(stateDir,'tasks/work'),readPersona:persona,model:config.model,getAgent,
+ const tracedController=new Proxy(controller,{get(target,key){if(key!=='prompt')return typeof target[key]==='function'?target[key].bind(target):target[key];return async(request,signal)=>{try{const worker=coordinator?.getWorkerContext(request.sessionId);if(worker){const source=state.get('task-source',worker.ticketId);const binding={eventId:source?.eventId,channel:worker.chatKey,requestId:request.requestId,ticketId:worker.ticketId};traceSource(request.sessionId,binding);telemetry.record({kind:'task.prompt',sessionId:request.sessionId,...binding,data:{requestId:request.requestId,ticketId:worker.ticketId}});}}catch{}return target.prompt(request,signal);};}});
+ const executor=createDshExecutor({controller:tracedController,workerRoot:path.join(stateDir,'tasks/work'),readPersona:persona,model:config.model,getAgent,
   onResult:async({sessionId,text,deliveryId,signal,isStillAuthorized})=>{
    if(signal?.aborted||isStillAuthorized?.()===false)return {accepted:false};
    const channel=Object.entries(mappings).find(([,id])=>id===sessionId)?.[0]||(sessionId===biliSession?'bili:public':null);if(!channel)throw Error('Task origin unmapped');
@@ -101,6 +111,8 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
   }});
  coordinator=createCoordinator({stateDir:path.join(stateDir,'tasks'),executor,deliverResult:executor.deliverResult,
   inspectDelivery:async({sessionId,deliveryId,kind})=>kind==='result'?{status:store.get(deliveryId)?'accepted':'not-found'}:executor.inspect({sessionId,deliveryId}),autoStart:false});
+ const rawCoordinator=coordinator;
+ coordinator=new Proxy(rawCoordinator,{get(target,key){if(key!=='submit')return target[key];return async(caller,args)=>{let source;try{source=state.get('request',args?.requestId)||state.binding(caller.sessionId);source=source&&{eventId:source.eventId,channel:source.channel,requestId:args?.requestId};}catch{}const task=await target.submit(caller,args);if(source)try{if(!state.get('task-source',task.id))state.put('task-source',task.id,source);}catch{}return task;};}});
  router=createRouter({store,assess,dispatch,timeoutMs:config.routerTimeoutMs||90000,policy:event=>!event.meta?.migrated&&!event.meta?.passive&&(event.kind!=='message.received'||event.meta?.route===true)});
  async function ingest(event){
   if(closed)return;
@@ -136,13 +148,27 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
    state.put('bili-wakes',day,{total:quota.total+1,slots:{...quota.slots,[slot]:(quota.slots[slot]||0)+1},lastAt:Date.now()});
   }catch{if(!closed)state.put('health','bili',{ok:false,at:Date.now(),code:'feed_unavailable'});}finally{signals.delete(control);feedBusy=false;}}
  function event(session,ev){
+  if(!session?.id||!ev)return;
   if(ev.type==='user/message'){const source=ev.data?.message?.source||ev.data?.source;const binding=state.get('request',source?.rpcId||'');if(binding)state.bind(session.id,binding);}
+  try{const source=traceSources.get(session.id)||state.binding(session.id);if(source){const ids=source.eventIds||[source.eventId];for(const eventId of ids)telemetry.native(session.id,ev,{...source,eventId});}}catch{}
   if(ev.type==='turn/end'&&coordinator.getWorkerContext(session.id)?.active)setImmediate(()=>coordinator.workerEnded(session.id,{failed:ev.data?.reason?.kind==='error'}).catch(()=>{}));
  }
  function status(){return {name:'Chopsticks',version:'0.1.0',ready:!closed,validation:config.validation===true,qq:lastAdapterStatus,router:router.status(),sessions:Object.keys(mappings).length,biliEnabled:config.bili?.enabled===true};}
+ function queryConsole(endpoint,payload={}){
+  if(endpoint==='traces'||endpoint==='logs')return telemetry.query(payload,endpoint==='logs',endpoint==='traces');
+  const bindings=state.list('binding'),sources=[...traceSources].map(([id,b])=>({id,...b}));
+  const sessions=[...new Map([...(config.bili?.enabled?[{sessionId:biliSession,channel:'bili:public',role:'bili'}]:[]),...Object.entries(mappings).map(([channel,sessionId])=>({sessionId,channel,role:'qq'})),...bindings.map(b=>({sessionId:b.id,channel:b.channel,role:'qq'})),...sources.map(b=>({sessionId:b.id,channel:b.channel,role:b.id.startsWith('chopsticks-router-')?'router':'worker'}))].map(b=>[b.sessionId,b])).values()];
+  if(endpoint==='overview')return coordinator.status({role:'operator',sessionId:'console',chatKey:'operator:console',characterId:character().id||'fish'}).then(tasks=>({health:telemetry.clean(status()),model:telemetry.clean(config.model),counts:router.status().counts,sessions:sessions.map(v=>telemetry.clean(v)),tasks:tasks.map(v=>telemetry.clean(v))}));
+  if(endpoint!=='events')throw Error('Unknown endpoint');
+  const clauses=[],args=[];for(const [field,column] of [['channel','e.channel'],['eventId','e.id']])if(typeof payload[field]==='string'&&payload[field]){clauses.push(column+'=?');args.push(payload[field].slice(0,512));}
+  if(Number.isSafeInteger(payload.beforeSeq)&&payload.beforeSeq>0){clauses.push('e.seq<?');args.push(payload.beforeSeq);}
+  if(payload.query){clauses.push("e.text LIKE ? ESCAPE '\\'");args.push('%'+String(payload.query).slice(0,500).replace(/[\\%_]/g,'\\$&')+'%');}
+  if(payload.sessionId){const matching=[...bindings,...sources].filter(b=>b.id===payload.sessionId);const ids=[...new Set([...matching.flatMap(b=>b.eventIds||[b.eventId]),...telemetry.eventIds(payload.sessionId)].filter(Boolean))];if(!ids.length)return {items:[],nextBeforeSeq:null};clauses.push('e.id IN ('+ids.map(()=>'?').join(',')+')');args.push(...ids);}
+  const limit=queryLimit(payload.limit),rows=store.db.prepare(`SELECT e.id,e.seq,e.kind,e.channel,e.text,e.at,r.state AS routeState FROM core_events e LEFT JOIN core_router r ON r.event_id=e.id ${clauses.length?'WHERE '+clauses.join(' AND '):''} ORDER BY e.seq DESC LIMIT ?`).all(...args,limit+1);const more=rows.length>limit;rows.length=Math.min(limit,rows.length);const items=rows.map(r=>({...r,sessionId:payload.sessionId||[...bindings,...sources].find(b=>b.eventId===r.id||b.eventIds?.includes(r.id))?.id||mappings[r.channel]||null}));return {items:items.map(v=>telemetry.clean(v)),nextBeforeSeq:more?items.at(-1).seq:null};
+ }
  const watchdog=setInterval(()=>{router.tick();const s=status();fs.writeFileSync(path.join(stateDir,'health.json'),JSON.stringify(s));onStatus(s);},3000);watchdog.unref?.();timers.push(watchdog);
- return {store,state,router,coordinator,adapter,caller,decide,send,event,ingest,persona,mappings,biliSession,config,status,pollFeed,
+ return {queryConsole,telemetry,store,state,router,coordinator,adapter,caller,decide,send,event,ingest,persona,mappings,biliSession,config,status,pollFeed,
   async start(){if(config.bili?.enabled)await ensure(biliSession,'chopsticks-bili');await synchronizeSessionModels({controller,state,model:config.model,sessionIds:[...Object.values(mappings),...(config.bili?.enabled?[biliSession]:[])]});coordinator.start();if(config.qq?.enabled!==false)await adapter.start();adapter.hydrateEvents?.(Object.keys(mappings).flatMap(channel=>store.recent({channel,groups:false,limit:200})));if(config.bili?.enabled){const timer=setInterval(()=>void pollFeed(),60000);timer.unref?.();timers.push(timer);}},
-  async close(){if(closed)return;closed=true;timers.forEach(clearInterval);signals.forEach(s=>s.abort());await adapter.close();await router.close();await coordinator.close();store.close();}
+  async close(){if(closed)return;closed=true;timers.forEach(clearInterval);signals.forEach(s=>s.abort());await adapter.close();await router.close();await coordinator.close();telemetry.close();store.close();}
  };
 }
