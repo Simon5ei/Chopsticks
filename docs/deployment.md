@@ -41,3 +41,13 @@ The unresponsive conversation was traced to received QQ events waiting behind Mi
 On model changes, native DSH selection updates all adopted QQ/Bili sessions without replacing their histories. Restored background workers also adopt the current model. Regression tests cover preserved sessions, partial synchronization retries and avoiding repeated updates.
 
 Restoring the Bili session exposed a compression-format defect in the first migration: history bytes were intact, but DSH requires the header in its own Zstandard frame. The adoption helper now preserves that frame contract and supports concatenated frames across Node 24 builds. The repaired session retained all 27,725,301 historical event bytes with the original SHA-256; native DSH successfully opened it and synchronized all nine adopted sessions to DeepSeek. Full local suite: 101 passed.
+
+## Native console — 2026-11-03
+
+The native **Settings → 筷子** section now provides overview, source events, emitted reasoning/tool traces, and logs. No SessionCross dependency or extra listening port was introduced. Read-only RPC reuses native owner authentication: live unauthenticated requests returned 401 and authenticated requests returned 200.
+
+Both Windows and server Linux suites passed 117 tests. Isolated DeepSeek acceptance verified cross-group recall, private exclusion, and background task results. Browser checks verified actual emitted reasoning, tool calls/results, source filtering, 78-row pagination/JSONL export and zero page errors. The temporary validation service was stopped afterward; no real QQ/Bili test messages were sent.
+
+Production was updated after an idle check. All nine adopted QQ/Bili sessions, DeepSeek selection and healthy QQ reception were verified. Backup: `/opt/chopsticks-backups/console-20261103-011858` (code, profile, private config and state). To revert this console release, stop DSH, restore `code.tgz` into `/opt/chopsticks`, recompose the web profile, and start DSH. The additive trace database may remain for audit; original session archives were not modified by this release.
+
+Native process logging uses explicit stdout metadata because the optional host logger produced no journal output on this deployment. Browser trace details remain in the private trace store. See [console data limits](console.md).
