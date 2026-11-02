@@ -4,7 +4,7 @@
 //   node bili-comment.mjs --oid <aid> --bvid <BV...> --message "@昵称 正文" --go
 //
 // Credentials live in a file outside the workspace and are never printed:
-//   %USERPROFILE%\.dsh\surfcore\bili\credentials.json  -> { sessdata, bili_jct, buvid3 }
+//   $CHOPSTICKS_FISH_HOME/bili/credentials.json  -> { sessdata, bili_jct, buvid3 }
 //
 // --dry  : identifies the account behind the cookie (nav), builds and prints the
 //          exact request, prints nothing postable. No write to bilibili.

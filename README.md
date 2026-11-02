@@ -49,7 +49,9 @@ CHOPSTICKS_FISH_HOME=/var/lib/chopsticks/fish node bili/mcp/server.mjs
 CHOPSTICKS_CONFIG=/var/lib/chopsticks/config.json node web/server.mjs
 ```
 
-DSH profile 将本包加入 `dependencies` 和 `dsh.profile.bundles`，由 `presets/runtime.patch.yml` 注册宿主及四个角色预设。配置、凭据、角色、SQLite 与真实聊天日志全部放源码目录之外。参考 [部署说明](docs/deployment.md) 和 [配置示例](config.example.json)。
+DSH profile 将本包加入 `dependencies` 和 `dsh.profile.bundles`，由 `presets/runtime.patch.yml` 注册宿主及角色预设。配置、凭据、角色、SQLite 与真实聊天日志全部放源码目录之外。参考 [部署说明](docs/deployment.md) 和 [配置示例](config.example.json)。
+
+日常开发与候选清单统一使用 `/root/workspace/dsh`，具体目录和两个调研日程见 [工作区说明](docs/workspace.md)。
 
 ## 实现与验收
 

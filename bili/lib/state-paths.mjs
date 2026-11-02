@@ -2,7 +2,7 @@
  * B站 工具链的路径解析：
  *   · 账号级（全局）：cookie、表情包、ffmpeg/bin、语音素材 —— 换角色不换账号；
  *   · 角色级（每个角色独立）：额度账本、评分、收藏、日记、动态状态、私信状态、待审…
- *     落在 `~/.dsh/surfcore/characters/<id>/bili/`。
+ *     落在 `$CHOPSTICKS_FISH_HOME/characters/<id>/bili/`。
  *
  * 每次进程启动读一次 `characters/current.json`；长命令在开始时捕获目录即可，
  * 中途切换角色不会把旧角色的行为记到新角色账上。
@@ -48,7 +48,7 @@ export function currentCharacter() {
   return cached
 }
 
-/** 当前角色的 B站 行为目录；没有角色系统时回退旧目录。 */
+/** 当前角色的 B站 行为目录；没有角色系统时使用账号级目录。 */
 export function biliStateDir() {
   return currentCharacter()?.biliDir || ACCOUNT_BILI_DIR
 }
@@ -57,7 +57,7 @@ export function biliState(...parts) {
   return path.join(biliStateDir(), ...parts)
 }
 
-/** 账号级文件（cookie / 表情包 / 二进制）永远走旧目录，不进角色包。 */
+/** 账号级文件（cookie / 表情包 / 二进制）放在外部 fishHome，不进角色包。 */
 export function accountBili(...parts) {
   if (parts.length === 1 && parts[0] === 'credentials.json' && process.env.CHOPSTICKS_BILI_CREDENTIALS) return path.resolve(process.env.CHOPSTICKS_BILI_CREDENTIALS)
   return path.join(ACCOUNT_BILI_DIR, ...parts)
