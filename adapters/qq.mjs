@@ -105,6 +105,31 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     try { return await starting; } finally { starting = null; }
   }
   function close() { lifecycle++; closed = true; clearTimeout(reconnectTimer); reconnectTimer = null; connected = false; socket?.close(); publish(); }
+  // Host-only restoration from its trusted canonical journal. Never expose this
+  // method as a model tool or accept events supplied by an external message.
+  function hydrateEvents(events) {
+    if (!Array.isArray(events)) throw new TypeError('Trusted journal events must be an array');
+    const restored = { received: 0, sent: 0 };
+    for (const event of events) {
+      if (!event || !['message.received', 'message.sent'].includes(event.kind)) continue;
+      let destination; try { destination = target(event.channel); } catch { continue; }
+      const messageId = String(event.meta?.messageId ?? ''), actorId = String(event.actorId ?? '');
+      if (!/^-?\d+$/.test(messageId) || !/^\d+$/.test(actorId) || typeof event.id !== 'string' || !event.id) continue;
+      const key = `${event.channel}:${messageId}`;
+      if (event.kind === 'message.sent') {
+        if (!botId || actorId !== botId) continue;
+        boundedSet(selfMessages, key, true);
+        restored.sent++;
+      } else {
+        if (actorId === botId || blocked.has(actorId) || (destination.kind === 'p' && destination.id !== actorId)) continue;
+        const copy = { ...event, actorId, meta: { ...event.meta, messageId, segments: segmentsOf(event.meta?.segments ?? []) } };
+        boundedSet(received, key, copy);
+        boundedSet(seen, event.id, true);
+        restored.received++;
+      }
+    }
+    return restored;
+  }
   function send({ channel, text = '', segments = [], replyTo, idempotencyKey } = {}) {
     let t, parts;
     try {
@@ -125,13 +150,24 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
       if (text) parts.push({ type: 'text', data: { text: String(text) } });
       if (!parts.length) throw new Error('Empty QQ message');
       if ([httpToken, wsToken].some(secret => secret && JSON.stringify(parts).includes(secret))) throw new Error('QQ message contains a gateway credential');
-      if (replyTo != null) { observed(channel, replyTo); parts.unshift({ type: 'reply', data: { id: String(replyTo) } }); }
+      if (replyTo != null) {
+        if (!selfMessages.has(`${channel}:${String(replyTo)}`)) observed(channel, replyTo);
+        parts.unshift({ type: 'reply', data: { id: String(replyTo) } });
+      }
     } catch (error) { return Promise.reject(error); }
     const key = String(idempotencyKey || randomUUID()), hash = fingerprint({ channel, parts });
     const previous = sends.get(key);
     if (previous) return previous.hash === hash ? previous.promise : Promise.reject(new Error('Idempotency key reused with different QQ content'));
-    // Bounded journal does not evict uncertain/confirmed intents silently. Host persists across restart.
-    if (sends.size >= LIMIT) return Promise.reject(new Error('QQ send receipt cache full; rotate adapter after durable reconciliation'));
+    // This is a bounded process-local cache, not the durable idempotency journal.
+    // The host must check its persisted send key before invoking send. Only
+    // settled results may age out; pending/ambiguous effects remain protected.
+    if (sends.size >= LIMIT) {
+      for (const [oldKey, entry] of sends) {
+        if (entry.state === 'confirmed' || entry.state === 'failed') { sends.delete(oldKey); break; }
+      }
+    }
+    if (sends.size >= LIMIT) return Promise.reject(new Error('QQ unresolved send cache full; reconcile uncertain deliveries'));
+    const entry = { hash, state: 'pending', promise: null };
     const promise = sendChain.then(async () => {
       if (closed) throw new Error('QQ adapter is closed'); target(channel);
       const now = Date.now(); while (sendTimes.length && sendTimes[0] < now - 60000) sendTimes.shift();
@@ -145,8 +181,12 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
       boundedSet(selfMessages, `${channel}:${messageId}`, true);
       try { await onEvent(event); } catch { throw problem('SEND_CONFIRMED_UNRECORDED', 'QQ confirmed delivery but journal write failed; do not resend'); }
       return event;
+    }).then(value => { entry.state = 'confirmed'; return value; }, error => {
+      entry.state = ['SEND_UNCERTAIN', 'SEND_CONFIRMED_UNRECORDED'].includes(error.code) ? 'uncertain' : 'failed';
+      throw error;
     });
-    sends.set(key, { hash, promise }); sendChain = promise.catch(() => {}); return promise;
+    entry.promise = promise;
+    sends.set(key, entry); sendChain = promise.catch(() => {}); return promise;
   }
   async function downloadImage(url) {
     let current = officialImageUrl(url);
@@ -192,5 +232,5 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     for (const id of ids.slice(0, 4)) forwards.push({ id, ...(await request('get_forward_msg', { id })) });
     return { forwards };
   }
-  return { start, close, send, getImage, getForward, status };
+  return { start, close, send, getImage, getForward, hydrateEvents, status };
 }

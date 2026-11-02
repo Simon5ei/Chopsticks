@@ -167,3 +167,57 @@ test('separate HTTP and websocket credentials never cross transports or escape i
   assert.equal(authorization, 'Bearer http-secret'); assert.equal(f.socket.options.headers.Authorization, 'Bearer ws-secret');
   for (const text of ['http-secret', 'ws-secret']) await assert.rejects(f.adapter.send({ channel: 'g:20001', text }), /credential/i);
 });
+
+test('settled send receipts age out without blocking continuous operation or evicting uncertain sends', async t => {
+  let now = 1700000000000, confirmed = 0, uncertainAttempts = 0;
+  t.mock.method(Date, 'now', () => now);
+  const f = await fixture({ fetchImpl: async (url, options) => {
+    if (url.endsWith('get_login_info')) return response({ user_id: '90001' });
+    if (JSON.parse(options.body).message.some(p => p.data.text === 'uncertain')) { uncertainAttempts++; throw new Error('fixture ambiguous'); }
+    return response({ message_id: String(++confirmed) });
+  } });
+  t.after(() => f.adapter.close());
+  const uncertain = { channel: 'g:20001', text: 'uncertain', idempotencyKey: 'uncertain-kept' };
+  await assert.rejects(f.adapter.send(uncertain), { code: 'SEND_UNCERTAIN' });
+  for (let n = 0; n < 5005; n++) { now += 61000; await f.adapter.send({ channel: 'g:20001', text: 'fixture', idempotencyKey: `settled-${n}` }); }
+  await assert.rejects(f.adapter.send(uncertain), { code: 'SEND_UNCERTAIN' });
+  assert.equal(confirmed, 5005);
+  assert.equal(uncertainAttempts, 1);
+  await f.adapter.send({ channel: 'g:20001', text: 'fixture', idempotencyKey: 'settled-5004' });
+  assert.equal(confirmed, 5005);
+});
+
+test('trusted journal hydration restores scoped media, reply authorization and confirmed self references', async t => {
+  const calls = [];
+  const f = await fixture({ fetchImpl: async (url, options) => {
+    if (!options.body) { calls.push(url); return new Response(Buffer.from('GIF89a'), { headers: { 'content-type': 'image/gif' } }); }
+    calls.push(JSON.parse(options.body));
+    return response(url.endsWith('get_login_info') ? { user_id: '90001' } : url.endsWith('get_forward_msg') ? { messages: [{ content: 'historical forward' }] } : { message_id: '999' });
+  } });
+  t.after(() => f.adapter.close());
+  const historical = { id: 'qq:g:20001:321', kind: 'message.received', channel: 'g:20001', actorId: '10002', text: '[image]', meta: { messageId: '321', segments: [{ type: 'image', data: { url: 'https://qpic.cn/history' } }, { type: 'forward', data: { id: 'old-forward' } }] } };
+  const hydrated = f.adapter.hydrateEvents([historical,
+    { id: 'qq:g:20001:777', kind: 'message.sent', channel: 'g:20001', actorId: '90001', text: 'old self', meta: { messageId: '777' } },
+    { ...historical, id: 'private', channel: 'p:10001', actorId: '10002' },
+    { ...historical, id: 'foreign', channel: 'g:999' },
+    { ...historical, id: 'invalid', meta: { messageId: 'not-numeric', segments: [] } },
+  ]);
+  assert.deepEqual(hydrated, { received: 1, sent: 1 });
+  historical.meta.segments[0].data.url = 'https://evil.invalid/changed';
+  assert.equal((await f.adapter.getImage({ channel: 'g:20001', messageId: '321' })).content[0].type, 'image');
+  assert.equal((await f.adapter.getForward({ channel: 'g:20001', messageId: '321' })).forwards[0].messages[0].content, 'historical forward');
+  await assert.rejects(f.adapter.getImage({ channel: 'g:20002', messageId: '321' }), /received/i);
+  await assert.rejects(f.adapter.getImage({ channel: 'p:10001', messageId: '321' }), /received/i);
+  await f.adapter.send({ channel: 'g:20001', text: 'reply after restart', replyTo: '321' });
+  assert.equal(calls.at(-1).message[0].data.id, '321');
+  await f.adapter.send({ channel: 'g:20001', text: 'quote confirmed self', replyTo: '777' });
+  assert.equal(calls.at(-1).message[0].data.id, '777');
+  await assert.rejects(f.adapter.send({ channel: 'g:20002', text: 'wrong channel', replyTo: '777' }), /received/i);
+  f.socket.message(inbound({ message: [{ type: 'reply', data: { id: '777' } }, { type: 'text', data: { text: 'following old self' } }] }));
+  await settle();
+  assert.equal(f.events.at(-1).meta.addressed, true);
+  f.adapter.hydrateEvents([{ ...historical, id:'qq:g:20001:654',meta:{messageId:'654',segments:[{type:'image',data:{url:'http://127.0.0.1/private'}}]}}]);
+  const before = calls.length;
+  await assert.rejects(f.adapter.getImage({ channel:'g:20001',messageId:'654' }), /Unsupported/);
+  assert.equal(calls.length, before);
+});
