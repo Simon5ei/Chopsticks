@@ -1,7 +1,7 @@
 {
   "stateDir": "/var/lib/chopsticks/state",
   "fishHome": "/var/lib/chopsticks/fish",
-  "model": { "provider": "minimax-cn", "model": "MiniMax-M3.1-Flash" },
+  "model": { "provider": "deepseek-official", "model": "deepseek-flash" },
   "qq": {
     "enabled": true,
     "httpUrl": "http://127.0.0.1:3000",

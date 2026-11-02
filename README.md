@@ -38,7 +38,7 @@ SessionCross 保留为未来跨机器调度插件的基础，与本项目解耦�
 
 ## 运行
 
-需要 Node 24、DSH 0.2.1-rc.2、已登录的 SnowLuma OneBot HTTP/WebSocket。抽帧需要 ffmpeg。模型由 DSH provider 提供，服务器无需 GPU。
+需要 Node 24、DSH 0.2.1-rc.2、已登录的 SnowLuma OneBot HTTP/WebSocket。抽帧需要 ffmpeg。默认模型为 DeepSeek（`deepseek-official / deepseek-flash`），模型由 DSH provider 提供，服务器无需 GPU。修改运行配置后，已接入会话与恢复的后台任务都会同步模型选择，历史保持不变。
 
 ```sh
 npm ci --ignore-scripts

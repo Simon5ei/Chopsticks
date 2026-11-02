@@ -33,12 +33,14 @@ export function createDshExecutor({controller,workerRoot,readPersona=()=>'',mode
   };
   return {
     async ensureSession({sessionId,ticket,caller}) {
-      try {await controller.inspect(sessionId); return;}
-      catch(error){if(!missing(error))throw error;}
-      const cwd=path.join(workerRoot,sessionId);
-      fs.mkdirSync(cwd,{recursive:true,mode:0o700});
-      const created=await controller.create({sessionId,cwd,agentPreset:'chopsticks-research-worker'});
-      if(created.sessionId!==sessionId) throw Error('DSH 未复用指定任务会话，停止以保护映射');
+      try {await controller.inspect(sessionId);}
+      catch(error){
+        if(!missing(error))throw error;
+        const cwd=path.join(workerRoot,sessionId);
+        fs.mkdirSync(cwd,{recursive:true,mode:0o700});
+        const created=await controller.create({sessionId,cwd,agentPreset:'chopsticks-research-worker'});
+        if(created.sessionId!==sessionId) throw Error('DSH 未复用指定任务会话，停止以保护映射');
+      }
       if(model?.provider&&model?.model)await controller.selectModel({sessionId,...model});
     },
     async prompt({sessionId,text,deliveryId,signal:deliverySignal,isStillAuthorized}) {

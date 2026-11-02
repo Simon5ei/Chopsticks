@@ -15,7 +15,7 @@ const old=read('/opt/surfcore/config.json');
 for(const name of ['characters','bili','bili.config.json','config.json','alignments.json']){const source=path.join('/root/.dsh/surfcore',name);if(fs.existsSync(source))fs.cpSync(source,path.join(fishHome,name),{recursive:true});}
 const current=read(path.join(fishHome,'characters/current.json'));current.dir=path.join(fishHome,'characters',current.id);fs.writeFileSync(path.join(fishHome,'characters/current.json'),JSON.stringify(current));
 const bili=read(path.join(fishHome,'bili.config.json'));delete bili.toolsPath;fs.writeFileSync(path.join(fishHome,'bili.config.json'),JSON.stringify(bili,null,2),{mode:0o600});
-const config={stateDir,fishHome,validation,validationProbe:validation,model:{provider:old.dsh.provider,model:old.dsh.model},fishGuard:old.fishGuard,
+const config={stateDir,fishHome,validation,validationProbe:validation,model:{provider:'deepseek-official',model:'deepseek-flash'},fishGuard:old.fishGuard,
  qq:{enabled:true,httpUrl:old.snowluma.httpUrl,wsUrl:old.snowluma.wsUrl,token:old.snowluma.accessToken,ownerId:old.ownerQQ,allowGroups:old.allow.groups,allowUsers:old.allow.private,denyUsers:old.deny.users},
  bili:{enabled:!validation,allowWrite:!validation,sessionId:`bili-whale-${current.id}`,intervalMs:Math.max(600000,(bili.night?.minGapMin||30)*60000),maxVideos:Math.min(6,bili.night?.maxVideos||3),windows:bili.night?.windows||[],maxWakesPerDay:bili.night?.maxWakesPerDay||12},webSearch:old.webSearch};
 if(validation){config.qq={enabled:true};config.bili.enabled=false;config.bili.allowWrite=false;}
@@ -37,6 +37,7 @@ if(validation){for(const name of ['.credentials.yaml','credentials.yaml']){const
 const original=yaml.load(fs.readFileSync(path.join(sourceProfile,'cordis.patch.yml'),'utf8'));
 function filter(rows){return rows.flatMap(row=>{if(row.insert){const list=filter(row.insert);return list.length?[{...row,insert:list}]:[];}if(/snowluma|surfcore|sessioncross|web-search-safe/.test(`${row.id||''} ${row.name||''}`))return [];return [row];});}
 const patches=filter(original);
+for(const row of patches)if(row.id==='agent-default-model')row.config={...row.config,...config.model};
 // Generic web MCP is supplied by this repository when present.
 if(fs.existsSync(path.join(app,'web/server.mjs')))patches.push({insert:[{id:'mcp-web-search-safe',name:'@deepseek-ai/dsh-mcp-client',config:{serverName:'web-search-safe',transport:'stdio',command:'/opt/node24/bin/node',args:[path.join(app,'web/server.mjs')],env:{CHOPSTICKS_CONFIG:path.join(root,'config.json')}}}]});
 fs.writeFileSync(path.join(targetProfile,'cordis.patch.yml'),yaml.dump(patches,{lineWidth:-1}));

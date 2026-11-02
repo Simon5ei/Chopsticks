@@ -1,4 +1,9 @@
 import test from 'node:test';
+test('restored background sessions adopt the configured model without recreating their history',async()=>{
+ const selected=[];const executor=createDshExecutor({controller:{inspect:async()=>({events:[]}),create:async()=>{throw Error('must not recreate');},selectModel:async value=>selected.push(value)},workerRoot:'unused',model:{provider:'deepseek-official',model:'deepseek-flash'}});
+ await executor.ensureSession({sessionId:'existing-worker'});
+ assert.deepEqual(selected,[{sessionId:'existing-worker',provider:'deepseek-official',model:'deepseek-flash'}]);
+});
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

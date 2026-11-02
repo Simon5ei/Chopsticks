@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createEventStore} from '../core/events.mjs';
 import {createRouter} from '../core/router.mjs';
 import {createHostState,hash} from './state.mjs';
+import {synchronizeSessionModels} from './model-sync.mjs';
 import {createQQAdapter} from '../adapters/qq.mjs';
 import {normalizeQqFishGuard,assessFishDensity} from '../adapters/fish-guard.mjs';
 import {createCoordinator} from '../tasks/coordinator.mjs';
@@ -141,7 +142,7 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
  function status(){return {name:'Chopsticks',version:'0.1.0',ready:!closed,validation:config.validation===true,qq:lastAdapterStatus,router:router.status(),sessions:Object.keys(mappings).length,biliEnabled:config.bili?.enabled===true};}
  const watchdog=setInterval(()=>{router.tick();const s=status();fs.writeFileSync(path.join(stateDir,'health.json'),JSON.stringify(s));onStatus(s);},3000);watchdog.unref?.();timers.push(watchdog);
  return {store,state,router,coordinator,adapter,caller,decide,send,event,ingest,persona,mappings,biliSession,config,status,pollFeed,
-  async start(){coordinator.start();if(config.qq?.enabled!==false)await adapter.start();adapter.hydrateEvents?.(Object.keys(mappings).flatMap(channel=>store.recent({channel,groups:false,limit:200})));if(config.bili?.enabled){const timer=setInterval(()=>void pollFeed(),60000);timer.unref?.();timers.push(timer);}},
+  async start(){if(config.bili?.enabled)await ensure(biliSession,'chopsticks-bili');await synchronizeSessionModels({controller,state,model:config.model,sessionIds:[...Object.values(mappings),...(config.bili?.enabled?[biliSession]:[])]});coordinator.start();if(config.qq?.enabled!==false)await adapter.start();adapter.hydrateEvents?.(Object.keys(mappings).flatMap(channel=>store.recent({channel,groups:false,limit:200})));if(config.bili?.enabled){const timer=setInterval(()=>void pollFeed(),60000);timer.unref?.();timers.push(timer);}},
   async close(){if(closed)return;closed=true;timers.forEach(clearInterval);signals.forEach(s=>s.abort());await adapter.close();await router.close();await coordinator.close();store.close();}
  };
 }

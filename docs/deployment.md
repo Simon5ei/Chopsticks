@@ -31,3 +31,13 @@ Public groups share group/Bili records. Private and operator records are not pla
 - Backup: `/opt/chopsticks-backups/20261103-001211`; pointer `/opt/chopsticks-backups/latest`.
 
 The initial start still used the prior composed entry. An explicit profile composition and restart activated the new bundle. The cutover helper now materializes the composed profile before launch and uses explicit `--profile web`.
+
+## DeepSeek migration — 2026-11-03
+
+The administrator subsequently requested DeepSeek for all fish execution. The production runtime and DSH default now use `deepseek-official / deepseek-flash` (configured display name DeepSeek-V4.1-Flash). MiniMax remains an installed provider but is not selected by the fish runtime.
+
+The unresponsive conversation was traced to received QQ events waiting behind MiniMax 429 failures. Four assessments that had never produced a dispatch were requeued after backup and model replacement; no sent or uncertain effect was replayed. A real incoming private message then received a confirmed QQ reply through DeepSeek, and the queue cleared.
+
+On model changes, native DSH selection updates all adopted QQ/Bili sessions without replacing their histories. Restored background workers also adopt the current model. Regression tests cover preserved sessions, partial synchronization retries and avoiding repeated updates.
+
+Restoring the Bili session exposed a compression-format defect in the first migration: history bytes were intact, but DSH requires the header in its own Zstandard frame. The adoption helper now preserves that frame contract and supports concatenated frames across Node 24 builds. The repaired session retained all 27,725,301 historical event bytes with the original SHA-256; native DSH successfully opened it and synchronized all nine adopted sessions to DeepSeek. Full local suite: 101 passed.
