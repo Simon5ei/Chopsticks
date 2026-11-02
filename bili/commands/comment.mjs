@@ -33,6 +33,7 @@ import { myDynamicKinds } from "../lib/my-dynamics.mjs"
 import { assertOutboundIdentitySafe } from '../lib/outbound-guard.mjs'
 import { findByParent as findAttack, setStatus as setAttackStatus } from '../lib/attacks.mjs'
 import { confirmReceipt } from '../lib/receipt.mjs'
+import { assertPublishingAccount } from '../lib/publishing-guard.mjs'
 
 // ── 限额闸（B 档「限额自主」的代码强制部分，2026-10-14 主人选 B 档）────────────────
 // 语义：闸门**只管自主发言**（带 --auto，即"她自己决定说的"）；主人当场授权的发言不拦 ✓
@@ -247,6 +248,18 @@ if (nav.code !== 0) {
   console.log(`  nav code=${nav.code} message=${nav.message}`)
   console.log('  → cookie 无效或已过期，先别发，重新复制一次')
   process.exit(4)
+}
+assertPublishingAccount(nav.data)
+if (type === '1') {
+  const viewResponse=await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
+    headers:{'user-agent':UA,referer,cookie:cookieHeader},
+  })
+  const view=await viewResponse.json()
+  if (!viewResponse.ok || view.code !== 0 || !/^[1-9][0-9]{0,19}$/.test(String(view.data?.aid))
+      || String(view.data.aid) !== String(oid) || view.data.bvid !== bvid) {
+    console.error('Bili video target does not match supplied oid/BVID; publishing refused')
+    process.exit(3)
+  }
 }
 console.log(`  账号: ${nav.data.uname}   (mid ${nav.data.mid})`)
 console.log(`  手机绑定: ${nav.data.mobile_verified ? '是' : '否'}   硬币 ${nav.data.money}`)

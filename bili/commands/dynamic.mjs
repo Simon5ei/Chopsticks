@@ -12,6 +12,7 @@ import crypto from 'node:crypto'
 import { gate, record } from '../lib/quota-gate.mjs'
 import { confirmReceipt } from '../lib/receipt.mjs'
 import { assertOutboundIdentitySafe } from '../lib/outbound-guard.mjs'
+import { assertPublishingAccount, assertDynamicAllowed } from '../lib/publishing-guard.mjs'
 
 const argv = process.argv.slice(2)
 const mode = argv[0]
@@ -56,6 +57,7 @@ async function whoami() {
     headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: cookieHeader },
   })).json()
   if (d.code !== 0) { console.log(`  登录态无效: code=${d.code} ${d.message}`); process.exit(4) }
+  assertPublishingAccount(d.data)
   console.log(`  账号: ${d.data.uname} (mid ${d.data.mid})  手机绑定=${d.data.mobile_verified ? '是' : '否'}`)
   return d.data.mid
 }
@@ -65,6 +67,7 @@ if (mode === 'post') {
   if (!isDry && !isGo) { console.error('必须显式 --dry 或 --go'); process.exit(2) }
   console.log('=== 登录态 ===')
   const mid = await whoami()
+  assertDynamicAllowed({auto:process.argv.includes('--auto')})
   const body = JSON.stringify({
     dyn_req: {
       content: { contents: [{ raw_text: text, type: 1, biz_id: '' }] },

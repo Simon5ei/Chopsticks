@@ -108,12 +108,14 @@ test('feed proposal is bounded read-only and does not expose local preference me
   assert.equal(result.preferences,undefined);
 });
 
-async function dynamicFixture(t,{code=0,id='123456',text='public fixture',auto=false}={}) {
+async function dynamicFixture(t,{code=0,id='123456',text='public fixture',auto=false,config={},quota,dailyState}={}) {
   const {runCommand}=await api();
   const fishHome=await fixture(t);
   const log=path.join(fishHome,'requests.jsonl');
   const fake=path.join(fishHome,'fake-network.mjs');
-  await fs.writeFile(path.join(fishHome,'bili.config.json'),JSON.stringify({owner:{mid:'777888999'},quota:{daily:2,scope:['dynamic']}}));
+  await fs.writeFile(path.join(fishHome,'bili.config.json'),JSON.stringify({self:{mid:'123'},owner:{mid:'777888999'},quota:{daily:2,scope:['dynamic']},...config}));
+  if (quota) await fs.writeFile(path.join(fishHome,'characters/fish/bili/quota.json'),JSON.stringify(quota));
+  if (dailyState) await fs.writeFile(path.join(fishHome,'characters/fish/bili/daily-dynamic.json'),JSON.stringify(dailyState));
   await fs.writeFile(fake, `import fs from 'node:fs';
 globalThis.fetch=async(url,options={})=>{
  fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({url:String(url),method:options.method||'GET'})+'\\n');
@@ -147,15 +149,16 @@ test('actual dynamic identity guard prevents owner disclosure before posting',as
   assert.notEqual(result.code,0); assert.equal(requests.filter(x=>x.method==='POST').length,0);
 });
 
-async function commentFixture(t,{auto=false,code=0,id='123456'}={}) {
+async function commentFixture(t,{auto=false,code=0,id='123456',aid='123',config={}}={}) {
   const {runCommand}=await api(); const fishHome=await fixture(t);
   const fake=path.join(fishHome,'fake-comment.mjs'),log=path.join(fishHome,'requests.jsonl');
+  await fs.writeFile(path.join(fishHome,'bili.config.json'),JSON.stringify({self:{mid:'123'},...config}));
   await fs.writeFile(fake, `import fs from 'node:fs';
 globalThis.fetch=async(url,options={})=>{
  fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({url:String(url),method:options.method||'GET'})+'\\n');
  if(String(url).includes('/nav')) return Response.json({code:0,data:{mid:123,uname:'fixture',wbi_img:{img_url:'https://i0.hdslb.com/abcdef.png',sub_url:'https://i0.hdslb.com/ghijkl.png'}}});
  if(String(url).includes('/reply/add')) return Response.json({code:${code},data:{rpid_str:${JSON.stringify(id)}}});
- if(String(url).includes('/view')) return Response.json({code:0,data:{owner:{mid:789}}});
+ if(String(url).includes('/view')) return Response.json({code:0,data:{aid:${JSON.stringify(aid)},bvid:${JSON.stringify(bv)},owner:{mid:789}}});
  return Response.json({code:-412,message:'fixture unavailable'});
 };`);
   const result=await runCommand(process.execPath,['--import',pathToFileURL(fake).href,path.join(root,'bili/commands/comment.mjs'),'--bvid',bv,'--oid','123','--message','public fixture','--go',...(auto?['--auto']:[])],{env:{...process.env,CHOPSTICKS_FISH_HOME:fishHome},timeoutMs:10000});
@@ -176,6 +179,42 @@ test('actual comment command emits one confirmed receipt or rejects API ambiguit
 test('autonomous comment fails closed when fish guard cannot inspect the thread',async t=>{
   const {result,requests}=await commentFixture(t,{auto:true});
   assert.notEqual(result.code,0); assert.equal(requests.filter(x=>x.method==='POST').length,0);
+});
+
+test('comment rejects mismatched or missing video oid before posting',async t=>{
+  for (const aid of ['222',null]) {
+    const {result,requests}=await commentFixture(t,{aid});
+    assert.notEqual(result.code,0); assert.equal(requests.filter(x=>x.method==='POST').length,0);
+    assert.doesNotMatch(result.stdout,/CHOPSTICKS_BILI_RECEIPT /);
+  }
+});
+
+test('both publishing commands reject absent or mismatched configured account',async t=>{
+  for (const fixtureCall of [commentFixture,dynamicFixture]) for (const self of [{mid:'999999'},{}]) {
+    const {result,requests}=await fixtureCall(t,{config:{self}});
+    assert.notEqual(result.code,0); assert.equal(requests.filter(x=>x.method==='POST').length,0);
+    assert.doesNotMatch(result.stdout,/CHOPSTICKS_BILI_RECEIPT /);
+  }
+});
+
+test('autonomous dynamics honor disabled flag and both migrated and new cooldown records',async t=>{
+  const at=new Date().toISOString();
+  for (const options of [
+    {config:{dynamics:{enabled:false,gapMin:30}}},
+    {config:{dynamics:{enabled:true,gapMin:30}},quota:{log:[{type:'dynamic',at}]}},
+    {config:{dynamics:{enabled:true,gapMin:30}},dailyState:{best:{at,dynId:'123456'}}},
+  ]) {
+    const {result,requests}=await dynamicFixture(t,{auto:true,...options});
+    assert.notEqual(result.code,0); assert.equal(requests.filter(x=>x.method==='POST').length,0);
+  }
+});
+
+test('autonomous dynamics allow expired cooldown and disabled gap explicitly',async t=>{
+  for (const gapMin of [0,30]) {
+    const at=new Date(Date.now()-(gapMin?31:0)*60000).toISOString();
+    const {result,requests}=await dynamicFixture(t,{auto:true,config:{dynamics:{enabled:true,gapMin}},quota:{log:[{type:'dynamic',at}]}});
+    assert.equal(result.code,0,result.stderr); assert.equal(requests.filter(x=>x.method==='POST').length,1);
+  }
 });
 
 test('all extracted library imports resolve without the upstream installation',async t=>{
