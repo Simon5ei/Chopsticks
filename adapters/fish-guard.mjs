@@ -226,4 +226,3 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
     fishNames,
   };
 }
-
