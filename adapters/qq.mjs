@@ -130,9 +130,10 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     }
     return restored;
   }
-  function send({ channel, text = '', segments = [], replyTo, idempotencyKey } = {}) {
+  function send({ channel, text = '', segments = [], replyTo, idempotencyKey, signal } = {}) {
     let t, parts;
     try {
+      signal?.throwIfAborted();
       t = target(channel); if (closed) throw new Error('QQ adapter is closed');
       if (!Array.isArray(segments)) throw new Error('QQ segments must be an array');
       if (String(text).length > 4000 || segments.length > 8) throw new Error('QQ send is too large');
@@ -169,6 +170,10 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     if (sends.size >= LIMIT) return Promise.reject(new Error('QQ unresolved send cache full; reconcile uncertain deliveries'));
     const entry = { hash, state: 'pending', promise: null };
     const promise = sendChain.then(async () => {
+      // A different send may have held this queue while the caller cancelled.
+      // Once HTTP starts, retain its confirmed/uncertain outcome; do not turn a
+      // potentially accepted send into a retryable cancellation.
+      signal?.throwIfAborted();
       if (closed) throw new Error('QQ adapter is closed'); target(channel);
       const now = Date.now(); while (sendTimes.length && sendTimes[0] < now - 60000) sendTimes.shift();
       if (sendTimes.length >= 8) throw problem('RATE_LIMIT', 'QQ send limit reached; wait before another send');
@@ -182,7 +187,7 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
       try { await onEvent(event); } catch { throw problem('SEND_CONFIRMED_UNRECORDED', 'QQ confirmed delivery but journal write failed; do not resend'); }
       return event;
     }).then(value => { entry.state = 'confirmed'; return value; }, error => {
-      entry.state = ['SEND_UNCERTAIN', 'SEND_CONFIRMED_UNRECORDED'].includes(error.code) ? 'uncertain' : 'failed';
+      entry.state = ['SEND_UNCERTAIN', 'SEND_CONFIRMED_UNRECORDED'].includes(error?.code) ? 'uncertain' : 'failed';
       throw error;
     });
     entry.promise = promise;

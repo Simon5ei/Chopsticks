@@ -221,3 +221,28 @@ test('trusted journal hydration restores scoped media, reply authorization and c
   await assert.rejects(f.adapter.getImage({ channel:'g:20001',messageId:'654' }), /Unsupported/);
   assert.equal(calls.length, before);
 });
+
+test('cancelling a queued send before its HTTP turn prevents that message from being sent', async t => {
+  let releaseFirst, sendRequests = 0;
+  const f = await fixture({ fetchImpl: async url => {
+    if (url.endsWith('get_login_info')) return response({ user_id: '90001' });
+    sendRequests++;
+    if (sendRequests === 1) return new Promise(resolve => { releaseFirst = () => resolve(response({ message_id: '888' })); });
+    return response({ message_id: '999' });
+  } });
+  t.after(() => f.adapter.close());
+  const firstController = new AbortController();
+  const first = f.adapter.send({ channel: 'g:20001', text: 'already sending', idempotencyKey: 'send-first', signal: firstController.signal });
+  await settle();
+  assert.equal(typeof releaseFirst, 'function');
+  const controller = new AbortController();
+  const second = f.adapter.send({ channel: 'g:20002', text: 'cancel while queued', idempotencyKey: 'send-second', signal: controller.signal });
+  const rejected = assert.rejects(second, /cancelled/);
+  controller.abort(new Error('fixture cancelled'));
+  firstController.abort(new Error('cancelled after HTTP admission'));
+  releaseFirst();
+  assert.equal((await first).meta.messageId, '888');
+  await rejected;
+  assert.equal(sendRequests, 1);
+  assert.equal(f.events.length, 1);
+});

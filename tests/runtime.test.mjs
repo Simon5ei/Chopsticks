@@ -9,7 +9,7 @@ import { createRuntime } from '../host/runtime.mjs';
 const incoming = (id, channel, meta = {}) => ({ id, kind: 'message.received', channel, actorId: '10001', text: id, meta: { addressed: true, messageId: id, ...meta } });
 async function until(condition) { for (let n = 0; n < 400; n++) { if (condition()) return; await delay(5); } assert.fail('Runtime condition timed out'); }
 
-async function fixture(t, { autoDecide = true, decideKind = 'respond', timeoutMs = 1000 } = {}) {
+async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chopsticks-runtime-'));
   const fishHome = path.join(dir, 'fish'), stateDir = path.join(dir, 'state');
   fs.mkdirSync(path.join(fishHome, 'characters', 'fish'), { recursive: true });
@@ -25,7 +25,7 @@ async function fixture(t, { autoDecide = true, decideKind = 'respond', timeoutMs
       if (input.sessionId.startsWith('chopsticks-router-')) {
         const events = JSON.parse(text.split('待判断事件：\n')[1]);
         assessments.push({ ...input, text, events, signal });
-        if (autoDecide) queueMicrotask(() => runtime.decide(input.sessionId, JSON.stringify(events.map(e => ({ eventId: e.id, kind: decideKind })))));
+        if (autoDecide) queueMicrotask(() => runtime.decide(input.sessionId, JSON.stringify(events.map(e => ({ eventId: e.id, kind: decideKind, ...(decidePrompt?{prompt:decidePrompt}:{}) })))));
       } else deliveries.push({ ...input, text, signal });
       return { accepted: true };
     }, async cancel(input) { cancels.push(input); }, async updateQueue() {},
@@ -70,11 +70,13 @@ test('runtime blocks stale outgoing text until fresh cross-group context is retu
   assert.equal(stale.reason, 'context_changed');
   assert.match(stale.context, /Correction: Wednesday/);
   assert.equal(f.sends.length, 0);
-  const confirmed = await f.runtime.send(sessionId, { text: 'Wednesday' });
+  const signal = new AbortController().signal;
+  const confirmed = await f.runtime.send(sessionId, { text: 'Wednesday' }, signal);
   assert.equal(confirmed.kind, 'message.sent');
   assert.equal(f.sends.length, 1);
   assert.equal(f.sends[0].channel, 'g:2');
   assert.ok(f.sends[0].idempotencyKey);
+  assert.equal(f.sends[0].signal, signal);
 });
 
 test('runtime separates private model evaluations and excludes passive or migrated evidence from routing', async t => {
@@ -124,4 +126,25 @@ test('runtime rejects an already-cancelled send before transport or send-journal
   await assert.rejects(f.runtime.send(f.deliveries[0].sessionId, { text: 'must not send' }, signal), /cancelled/);
   assert.equal(f.sends.length, 0);
   assert.equal(f.runtime.store.db.prepare('SELECT COUNT(*) AS count FROM host_sends').get().count, 0);
+});
+
+test('runtime can dispatch a long source task when public context is already full', async t => {
+  const f = await fixture(t, { decideKind: 'task', decidePrompt: 'TASK_INTENT_MARKER 比较资料中的差异。' + '任务要点'.repeat(2000) });
+  for (let n = 0; n < 20; n++) await f.runtime.ingest({ id: `large-context-${n}`, kind: 'message.sent', channel: 'g:2', actorId: '90001', text: `Public fact ${n}: ` + 'x'.repeat(2000), meta: { messageId: String(1000 + n) } });
+  const context = f.runtime.store.context({ channel: 'g:1' });
+  assert.ok(context.text.length > 10000, 'fixture must fill the real context budget');
+  await f.runtime.ingest({ ...incoming('long-task', 'g:1'), text: 'TASK_GOAL_MARKER 请比较这些公开资料。' + '长内容'.repeat(2000) });
+  await until(() => {
+    const counts = f.runtime.router.status().counts;
+    return counts.dispatched + counts.uncertain + counts.failed > 0;
+  });
+  assert.equal(f.runtime.router.status().counts.dispatched, 1, 'long task must be accepted rather than rejected by coordinator prompt limit');
+  const sessionId = f.runtime.mappings['g:1'];
+  const tasks = await f.runtime.coordinator.status(f.runtime.caller(sessionId));
+  assert.equal(tasks.length, 1);
+  await until(() => f.deliveries.some(d => d.sessionId.startsWith('chopsticks-worker-')));
+  const worker = f.deliveries.find(d => d.sessionId.startsWith('chopsticks-worker-'));
+  assert.match(worker.text, /TASK_GOAL_MARKER/);
+  assert.match(worker.text, /TASK_INTENT_MARKER/);
+  assert.match(worker.text, /Public fact/);
 });
