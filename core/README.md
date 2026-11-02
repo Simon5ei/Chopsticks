@@ -24,12 +24,14 @@ store.close();
 - Kinds are `message.received`, `message.sent`, `task.result`, and `timer`.
   `message.sent` requires a nonempty `meta.messageId` from a confirmed receipt.
   The store cannot verify the receipt itself; the adapter must do that.
-- Channels are `g:<digits>`, `p:<digits>`, or `operator:<word/dot/dash>`.
+- Channels are `g:<digits>`, `p:<digits>`, `operator:<word/dot/dash>`, or
+  `bili:public` (public video observations and confirmed comments/dynamics).
   `at` defaults to ingestion time and is normalized to ISO UTC.
 - `recent({channel, groups=true, limit=20, beforeSeq?, query?})` returns the newest
   matching records in chronological order. Limit is capped at 200. `beforeSeq` is
   exclusive; `query` is a literal case-insensitive SQLite substring filter.
-  Group callers see only group records, across groups unless `groups=false`.
+  Group and `bili:public` callers share one public domain containing all `g:*`
+  and `bili:public` records. `groups=false` restricts recall to the exact channel.
   Private/operator callers see only their exact channel.
 - `context({channel, limit=20, maxChars=12000})` returns `{revision,events,text}`.
   Revision is the global latest sequence; duplicate appends do not advance it.

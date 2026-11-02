@@ -28,8 +28,11 @@ function boundedInt(value, fallback, max) {
 }
 
 function validateChannel(channel) {
-  if (typeof channel !== 'string' || !/^(?:[gp]:[0-9]+|operator:[\w.-]+)$/.test(channel)) throw new TypeError('Invalid event channel');
+  if (typeof channel !== 'string' || !/^(?:[gp]:[0-9]+|operator:[\w.-]+|bili:public)$/.test(channel)) throw new TypeError('Invalid event channel');
 }
+
+const publicScope = "(channel LIKE 'g:%' OR channel = 'bili:public')";
+const isPublicChannel = channel => channel.startsWith('g:') || channel === 'bili:public';
 
 function decode(row) {
   return row ? { seq: row.seq, id: row.id, kind: row.kind, channel: row.channel, actorId: row.actor_id, text: row.text, at: row.at, meta: JSON.parse(row.meta) } : undefined;
@@ -72,7 +75,7 @@ export function createEventStore({ stateDir }) {
     validateChannel(channel);
     const values = [];
     const clauses = [];
-    if (groups && channel.startsWith('g:')) clauses.push("channel LIKE 'g:%'");
+    if (groups && isPublicChannel(channel)) clauses.push(publicScope);
     else { clauses.push('channel = ?'); values.push(channel); }
     if (beforeSeq != null) { clauses.push('seq < ?'); values.push(boundedInt(beforeSeq, 0, Number.MAX_SAFE_INTEGER)); }
     if (query != null && String(query)) { clauses.push("text LIKE ? ESCAPE '\\'"); values.push(`%${String(query).slice(0, 500).replace(/[\\%_]/g, '\\$&')}%`); }
@@ -84,8 +87,8 @@ export function createEventStore({ stateDir }) {
     const count = boundedInt(limit, 20, 200);
     const budget = boundedInt(maxChars, 12000, 100000);
     const pool = recent({ channel, limit: 200 }).reverse();
-    const selfScope = channel.startsWith('g:') ? "channel LIKE 'g:%'" : 'channel = ?';
-    const selfArgs = channel.startsWith('g:') ? [] : [channel];
+    const selfScope = isPublicChannel(channel) ? publicScope : 'channel = ?';
+    const selfArgs = isPublicChannel(channel) ? [] : [channel];
     const self = db.prepare(`SELECT * FROM core_events WHERE kind = 'message.sent' AND ${selfScope} ORDER BY seq DESC LIMIT ?`)
       .all(...selfArgs, Math.max(1, Math.floor(count / 3))).map(decode);
     const prioritized = [...self, ...pool.filter(e => !self.some(s => s.id === e.id))].slice(0, count);

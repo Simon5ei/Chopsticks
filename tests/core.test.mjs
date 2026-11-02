@@ -205,3 +205,39 @@ test('busy group traffic cannot evict the latest confirmed self fact from recall
   for (let n = 0; n < 205; n++) store.append(event(`busy-${n}`, 'g:2'));
   assert.match(store.context({ channel: 'g:2', limit: 4 }).text, /agreed date is Tuesday/);
 });
+
+test('Bili public events share group recall while private and operator channels remain isolated', t => {
+  const { store } = fixture(t);
+  store.append(event('private-only', 'p:7'));
+  store.append(event('operator-only', 'operator:root'));
+  store.append(event('group-fact', 'g:1'));
+  store.append(event('watched-video', 'bili:public', { kind: 'task.result', text: 'Watched a public video about Saturn' }));
+  store.append(event('bili-comment', 'bili:public', { kind: 'message.sent', text: 'Confirmed a comment about Saturn', meta: { messageId: 'rpid:321' } }));
+  assert.deepEqual(store.recent({ channel: 'g:2' }).map(e => e.id), ['group-fact', 'watched-video', 'bili-comment']);
+  assert.deepEqual(store.recent({ channel: 'bili:public' }).map(e => e.id), ['group-fact', 'watched-video', 'bili-comment']);
+  assert.deepEqual(store.recent({ channel: 'bili:public', groups: false }).map(e => e.id), ['watched-video', 'bili-comment']);
+  assert.deepEqual(store.recent({ channel: 'g:1', groups: false }).map(e => e.id), ['group-fact']);
+  for (const channel of ['g:2', 'bili:public']) {
+    const context = store.context({ channel });
+    assert.match(context.text, /Saturn/);
+    assert.match(context.text, /group-fact/);
+    assert.doesNotMatch(context.text, /private-only|operator-only/);
+  }
+  assert.deepEqual(store.context({ channel: 'p:7' }).events.map(e => e.id), ['private-only']);
+  assert.deepEqual(store.context({ channel: 'operator:root' }).events.map(e => e.id), ['operator-only']);
+  assert.throws(() => store.append(event('other-bili', 'bili:private')), /channel/);
+});
+
+test('Bili confirmed publishing is prioritized across public scopes without self-triggering dispatch', async t => {
+  const f = fixture(t);
+  f.store.append(event('bili-confirmed', 'bili:public', { kind: 'message.sent', text: 'Posted a public dynamic', meta: { messageId: 'dynamic:99' } }));
+  for (let n = 0; n < 205; n++) f.store.append(event(`public-noise-${n}`, 'g:1'));
+  assert.match(f.store.context({ channel: 'g:2', limit: 2 }).text, /Posted a public dynamic/);
+  assert.match(f.store.context({ channel: 'bili:public', limit: 2 }).text, /Posted a public dynamic/);
+  const assessed = [];
+  const router = f.router({ assess: async ({ events }) => { assessed.push(...events.map(e => e.id)); return { actions: [] }; }, dispatch: async () => assert.fail('observe only') });
+  await router.ingest(event('bili-observation', 'bili:public', { kind: 'task.result' }));
+  await until(() => router.status().counts.observed === 207);
+  assert.ok(assessed.includes('bili-observation'));
+  assert.ok(!assessed.includes('bili-confirmed'));
+});
