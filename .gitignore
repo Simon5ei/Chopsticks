@@ -1,0 +1,10 @@
+node_modules/
+runtime/
+state/
+*.sqlite*
+.env*
+config.json
+credentials*
+*.tgz
+*.log
+deployment/private/

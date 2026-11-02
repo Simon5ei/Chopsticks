@@ -5,6 +5,7 @@ import {createEventStore} from '../core/events.mjs';
 import {createRouter} from '../core/router.mjs';
 import {createHostState,hash} from './state.mjs';
 import {createQQAdapter} from '../adapters/qq.mjs';
+import {normalizeQqFishGuard,assessFishDensity} from '../adapters/fish-guard.mjs';
 import {createCoordinator} from '../tasks/coordinator.mjs';
 import {createDshExecutor} from '../tasks/dsh-executor.mjs';
 import {createFeedProposal} from '../bili/feed.mjs';
@@ -20,6 +21,12 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
  const biliSession=config.bili?.sessionId||`bili-whale-${character().id}`;
  let closed=false,router,coordinator,adapter,lastAdapterStatus={},feedBusy=false;
  const signals=new Set(),timers=[];
+ const fishGuard=normalizeQqFishGuard(config.fishGuard||{});
+ function fishAssessment(channel,extra){
+  if(!channel.startsWith('g:')||!fishGuard.enabled)return {blocked:false};
+  const events=store.recent({channel,groups:false,limit:200});if(extra&&!events.some(e=>e.id===extra.id))events.push(extra);
+  return assessFishDensity(events.map(e=>({sender:e.meta?.senderName||'',userId:e.actorId,isSelf:e.kind==='message.sent',isOwner:e.meta?.admin,time:new Date(e.at||Date.now()).getTime(),text:e.text})),{guard:fishGuard,groupId:channel.slice(2)});
+ }
  async function ensure(sessionId,preset){
   try{await controller.inspect(sessionId);}catch(e){if(!missing(e))throw e;
    const cwd=path.join(stateDir,'workers',sessionId);fs.mkdirSync(cwd,{recursive:true});
@@ -99,7 +106,9 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
   if(event.kind==='message.received'){
    const last=state.get('wake',event.channel)||{at:0};const addressed=event.meta?.addressed||event.meta?.admin||event.channel.startsWith('p:');
    const asleep=state.get('sleep',event.channel)?.until>Date.now();
-   const route=Boolean(addressed||(!asleep&&Date.now()-last.at>(config.wakeGapMs||10000)));
+   const density=fishAssessment(event.channel,event);if(density.blocked)state.put('fish-cooldown',event.channel,{until:Date.now()+fishGuard.cooldownMs});
+   const guarded=(density.blocked||state.get('fish-cooldown',event.channel)?.until>Date.now())&&!(addressed&&fishGuard.bypassDirectAddress);
+   const route=Boolean(!guarded&&(addressed||(!asleep&&Date.now()-last.at>(config.wakeGapMs||10000))));
    event={...event,meta:{...event.meta,route}};if(route)state.put('wake',event.channel,{at:Date.now()});
   }
   return router.ingest(event);
@@ -108,14 +117,22 @@ export async function createRuntime({config,controller,getAgent=()=>null,adapter
  async function send(sessionId,{text,replyTo},signal){
   signal?.throwIfAborted();
   const bound=caller(sessionId);if(!/^[gp]:/.test(bound.channel))throw Error('QQ send requires QQ source');
+  const trigger=store.get(bound.eventId);const direct=trigger?.meta?.addressed||trigger?.meta?.admin;
+  if(fishGuard.blockSends&&!(direct&&fishGuard.bypassDirectAddress)&&(fishAssessment(bound.channel).blocked||state.get('fish-cooldown',bound.channel)?.until>Date.now()))return {sent:false,reason:'fish_cooldown'};
   const fresh=state.fresh(sessionId);if(fresh.changed)return {sent:false,reason:'context_changed',instruction:'先读新增事实，重新判断措辞后再发送。',context:fresh.text,revision:fresh.revision};
   const input={channel:bound.channel,text,replyTo};const key=`qq-send:${hash([sessionId,bound.eventId,input])}`;
   return state.send(key,input,()=>{signal?.throwIfAborted();return adapter.send({...input,idempotencyKey:key,signal});});
  }
  const feed=createFeedProposal({fishHome});
  async function pollFeed(){if(closed||feedBusy||!config.bili?.enabled)return;feedBusy=true;const control=new AbortController();signals.add(control);
-  try{const bucket=Math.floor(Date.now()/(config.bili.intervalMs||1800000));const id=`bili-feed:${bucket}`;if(store.get(id))return;
+  try{const now=new Date(),day=now.toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'}),minute=now.getHours()*60+now.getMinutes();
+   const windows=config.bili.windows||[];const minutes=s=>String(s).split(':').map(Number).reduce((a,v,i)=>a+v*(i?1:60),0);
+   const slot=windows.findIndex(w=>minutes(w.start)<=minutes(w.end)?minute>=minutes(w.start)&&minute<minutes(w.end):minute>=minutes(w.start)||minute<minutes(w.end));
+   if(windows.length&&slot<0)return;const quota=state.get('bili-wakes',day)||{total:0,slots:{},lastAt:0};
+   if(quota.total>=(config.bili.maxWakesPerDay||12)||(slot>=0&&(quota.slots[slot]||0)>=(windows[slot].wakes||3))||Date.now()-quota.lastAt<(config.bili.intervalMs||1800000))return;
+   const bucket=Math.floor(Date.now()/(config.bili.intervalMs||1800000));const id=`bili-feed:${bucket}`;if(store.get(id))return;
    const proposal=await feed({limit:config.bili.maxVideos||3,signal:control.signal});await ingest({id,kind:'timer',channel:'bili:public',actorId:'timer',text:`B站自由浏览机会。可从以下候选选感兴趣的观看，决定是否自然评论；不必每次发布。${JSON.stringify(proposal)}`});
+   state.put('bili-wakes',day,{total:quota.total+1,slots:{...quota.slots,[slot]:(quota.slots[slot]||0)+1},lastAt:Date.now()});
   }catch{if(!closed)state.put('health','bili',{ok:false,at:Date.now(),code:'feed_unavailable'});}finally{signals.delete(control);feedBusy=false;}}
  function event(session,ev){
   if(ev.type==='user/message'){const source=ev.data?.message?.source||ev.data?.source;const binding=state.get('request',source?.rpcId||'');if(binding)state.bind(session.id,binding);}

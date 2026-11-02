@@ -1,0 +1,19 @@
+{
+  "stateDir": "/var/lib/chopsticks/state",
+  "fishHome": "/var/lib/chopsticks/fish",
+  "model": { "provider": "minimax-cn", "model": "MiniMax-M3.1-Flash" },
+  "qq": {
+    "enabled": true,
+    "httpUrl": "http://127.0.0.1:3000",
+    "wsUrl": "ws://127.0.0.1:3001",
+    "token": "REPLACE_OUTSIDE_REPOSITORY",
+    "ownerId": "123456",
+    "allowGroups": ["123456789"],
+    "allowUsers": ["123456"],
+    "denyUsers": []
+  },
+  "bili": { "enabled": true, "allowWrite": false, "intervalMs": 1800000, "maxVideos": 3 },
+  "webSearch": { "provider": "auto", "apiKeyEnv": "DEEPSEEK_API_KEY" },
+  "routerTimeoutMs": 90000,
+  "wakeGapMs": 10000
+}

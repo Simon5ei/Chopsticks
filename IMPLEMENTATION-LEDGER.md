@@ -1,0 +1,13 @@
+# Execution ledger
+
+Repository Simon5ei/Chopsticks is empty and public; clone is new isolated checkout on feat/initial-runtime. No separate worktree needed for this new dedicated repository. User authorizes push and deploy.
+Existing local SurfCore sources were cleaned by prior user work; retrieved code-only reference from healthy server, excluding config/state/credentials. Old service remains active during construction.
+Plan approved by user through architecture acceptance. Ruling: rewrite QQ bridge (old monolith ~860KB), extract only small proven helpers. Keep existing QQ histories and external role state, drop unrelated product features.
+
+Completed tasks 1–4: independent canonical SQLite store, semantic Router, QQ adapter, nine Bili MCP tools, scope-aware memory, official task core adaptation, web MCP, native DSH host/presets. Full local suite reached 98 passing tests.
+Independent final review found queued-send cancellation and oversized delegated input bugs; one fix wave (1b91ffa, 8477a07) resolved both. Scoped re-review passed 28/28 relevant tests with no blocking findings.
+Real server validation uses an isolated DSH home and fake QQ transport. MiniMax returned 429 plan exhausted; user explicitly authorized DeepSeek for validation only. Production stays MiniMax. Cross-group confirmed self-fact and private exclusion passed; a real background model task reported a result into the canonical journal.
+Logical Router state is persistent; model assessment contexts are fresh per evaluation to bound history and prevent private-to-public contamination. Source group experiences remain shared. Native original QQ/Bili history is retained; Bili requires offline preset-header adoption with subsequent events checksum verification.
+First release deliberately omits the old settings product, voice, desktop pet, installer/updater, slang learner, automatic sticker collection, poke and legacy outreach. The fish's archived data stays available for later selective restoration; omission costs convenience, not deletion of history.
+
+Cutover completed 2026-11-03: backup /opt/chopsticks-backups/20261103-001211, 8 mappings, 9 session histories prefix verified, 326 event facts +19 lightweight memories imported, 287 role records preserved. Native profile composition required explicit refresh; fixed helper to materialize and use --profile web. HTTP/WS credentials are distinct per SnowLuma account; verified HTTP identity, configured each transport separately, QQ connected/healthy, old sender count0. Linux server99/99 tests passed. Source publication and final manifest verification follow.
