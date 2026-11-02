@@ -9,7 +9,7 @@ import { createRuntime } from '../host/runtime.mjs';
 const incoming = (id, channel, meta = {}) => ({ id, kind: 'message.received', channel, actorId: '10001', text: id, meta: { addressed: true, messageId: id, ...meta } });
 async function until(condition) { for (let n = 0; n < 400; n++) { if (condition()) return; await delay(5); } assert.fail('Runtime condition timed out'); }
 
-async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000 } = {}) {
+async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000, ownerId } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chopsticks-runtime-'));
   const fishHome = path.join(dir, 'fish'), stateDir = path.join(dir, 'state');
   fs.mkdirSync(path.join(fishHome, 'characters', 'fish'), { recursive: true });
@@ -40,7 +40,7 @@ async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePro
       },
     };
   };
-  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false }, bili: { enabled: false }, routerTimeoutMs: timeoutMs }, controller, adapterFactory });
+  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false, ownerId }, bili: { enabled: false }, routerTimeoutMs: timeoutMs }, controller, adapterFactory });
   await runtime.start();
   t.after(async () => { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { runtime, assessments, deliveries, sends, cancels, adapterOptions };
@@ -96,11 +96,11 @@ test('runtime separates private model evaluations and excludes passive or migrat
 });
 
 test('runtime does not apply a queued request binding until that request is consumed', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { ownerId: '20002' });
   await f.runtime.ingest(incoming('first', 'g:1'));
   await until(() => f.deliveries.length === 1);
   const sessionId = f.deliveries[0].sessionId;
-  await f.runtime.ingest(incoming('admin-followup', 'g:1', { admin: true }));
+  await f.runtime.ingest({...incoming('admin-followup', 'g:1', { admin: true }), actorId: '20002'});
   await until(() => f.deliveries.length === 2);
   assert.equal(f.runtime.caller(sessionId).eventId, 'first');
   assert.equal(f.runtime.caller(sessionId).admin, false);

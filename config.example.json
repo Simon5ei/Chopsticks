@@ -12,6 +12,7 @@
     "allowUsers": ["123456"],
     "denyUsers": []
   },
+  "development": { "enabled": true, "workspace": "/root/workspace/dsh" },
   "bili": { "enabled": true, "allowWrite": false, "intervalMs": 1800000, "maxVideos": 3 },
   "webSearch": { "provider": "auto", "apiKeyEnv": "DEEPSEEK_API_KEY" },
   "routerTimeoutMs": 90000,
