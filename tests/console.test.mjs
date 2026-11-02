@@ -49,6 +49,13 @@ test('console event pages retain requested row count and cursor without gaps',as
  const {createRuntime}=await import('../host/runtime.mjs');const dir=fixture(t),r=await createRuntime({config:{stateDir:dir,fishHome:dir,qq:{enabled:false},bili:{enabled:true,sessionId:'bili'}},controller:{},adapterFactory:()=>({close:async()=>{}})});t.after(()=>r.close());for(let i=0;i<60;i++)r.store.append({id:'e'+i,kind:'message.received',channel:'g:1',actorId:'u',text:'x'});const page=r.queryConsole('events',{limit:50});assert.equal(page.items.length,50);assert.equal(r.queryConsole('events',{limit:50,beforeSeq:page.nextBeforeSeq}).items.length,10);assert.ok((await r.queryConsole('overview')).sessions.some(s=>s.sessionId==='bili'));
 });
 
+test('bound Bili session keeps its Bili role in console overview',async t=>{
+ const {createRuntime}=await import('../host/runtime.mjs');const dir=fixture(t);
+ const r=await createRuntime({config:{stateDir:dir,fishHome:dir,qq:{enabled:false},bili:{enabled:true,sessionId:'bili'}},controller:{},adapterFactory:()=>({close:async()=>{}})});t.after(()=>r.close());
+ r.state.bind('bili',{channel:'bili:public',eventId:'bili-event'});
+ assert.equal((await r.queryConsole('overview')).sessions.find(s=>s.sessionId==='bili').role,'bili');
+});
+
 test('historical source filters survive newer consumed bindings and runtime restart',async t=>{
  const {createRuntime}=await import('../host/runtime.mjs');const dir=fixture(t),options={config:{stateDir:dir,fishHome:dir,qq:{enabled:false}},controller:{},adapterFactory:()=>({close:async()=>{}})};let r=await createRuntime(options);
  for(const id of ['first','second']){r.store.append({id,kind:'message.received',channel:'g:1',actorId:'u',text:id});r.state.put('request',id,{eventId:id,channel:'g:1',requestId:id});r.event({id:'chat'},{type:'user/message',data:{source:{rpcId:id}}});r.event({id:'chat'},{type:'turn/start',data:{turn:1}});}
