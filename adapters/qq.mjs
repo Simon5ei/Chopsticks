@@ -10,6 +10,8 @@ const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).
 export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, allowGroups = [], allowUsers = [], denyUsers = [],
   onEvent = async () => {}, onStatus = () => {}, fetchImpl = globalThis.fetch, WebSocketImpl } = {}) {
   const base = new URL(httpUrl); const websocketUrl = new URL(wsUrl);
+  const httpToken = typeof token === 'string' ? token : String(token?.http ?? '');
+  const wsToken = typeof token === 'string' ? token : String(token?.ws ?? '');
   if (!['http:', 'https:'].includes(base.protocol) || !['ws:', 'wss:'].includes(websocketUrl.protocol)
     || base.username || base.password || websocketUrl.username || websocketUrl.password) throw new Error('Invalid QQ gateway URL');
   const groups = new Set(allowGroups.map(String)), users = new Set(allowUsers.map(String)), blocked = new Set(denyUsers.map(String));
@@ -29,7 +31,7 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     let res, body;
     try {
       res = await fetchImpl(`${base.href.replace(/\/$/, '')}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json',
-        ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(data), signal: AbortSignal.timeout(15000) });
+        ...(httpToken ? { authorization: `Bearer ${httpToken}` } : {}) }, body: JSON.stringify(data), signal: AbortSignal.timeout(15000) });
       body = await res.json();
     } catch {
       throw problem(sending ? 'SEND_UNCERTAIN' : 'GATEWAY_UNAVAILABLE', sending ? 'QQ send acknowledgement unavailable; do not retry blindly' : 'QQ gateway request failed');
@@ -78,7 +80,7 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
   }
   function connect() {
     if (closed) return;
-    try { socket = new WebSocketImpl(websocketUrl.href, { headers: token ? { Authorization: `Bearer ${token}` } : {}, maxPayload: 2 * 1024 * 1024 }); }
+    try { socket = new WebSocketImpl(websocketUrl.href, { headers: wsToken ? { Authorization: `Bearer ${wsToken}` } : {}, maxPayload: 2 * 1024 * 1024 }); }
     catch { lastError = 'QQ websocket connection failed'; reconnect(); return; }
     const current = socket;
     current.on('open', () => { if (closed || socket !== current) return; connected = true; attempts = 0; lastError = null; publish(); });
@@ -122,7 +124,7 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
       }
       if (text) parts.push({ type: 'text', data: { text: String(text) } });
       if (!parts.length) throw new Error('Empty QQ message');
-      if (token && JSON.stringify(parts).includes(token)) throw new Error('QQ message contains a gateway credential');
+      if ([httpToken, wsToken].some(secret => secret && JSON.stringify(parts).includes(secret))) throw new Error('QQ message contains a gateway credential');
       if (replyTo != null) { observed(channel, replyTo); parts.unshift({ type: 'reply', data: { id: String(replyTo) } }); }
     } catch (error) { return Promise.reject(error); }
     const key = String(idempotencyKey || randomUUID()), hash = fingerprint({ channel, parts });

@@ -159,3 +159,11 @@ test('gateway credentials cannot be echoed by the send tool', async t => {
   await assert.rejects(f.adapter.send({ channel: 'g:20001', text: 'private-token' }), /credential/i);
   assert.equal(f.requests.filter(r => r.url.endsWith('send_group_msg')).length, 0);
 });
+test('separate HTTP and websocket credentials never cross transports or escape in messages', async t => {
+  let authorization;
+  const f = await fixture({ token: { http: 'http-secret', ws: 'ws-secret' }, fetchImpl: async (_url, opts) => {
+    authorization = opts.headers.authorization; return response({ user_id: '90001' });
+  } }); t.after(() => f.adapter.close());
+  assert.equal(authorization, 'Bearer http-secret'); assert.equal(f.socket.options.headers.Authorization, 'Bearer ws-secret');
+  for (const text of ['http-secret', 'ws-secret']) await assert.rejects(f.adapter.send({ channel: 'g:20001', text }), /credential/i);
+});
