@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
       reasoning:'模型思考', 'assistant.text':'模型输出', 'tool.call':'工具调用', 'tool.result':'工具结果',
       'turn.start':'回合开始', 'turn.end':'回合结束', 'step.start':'步骤开始', 'step.end':'步骤结束',
       'llm.retry':'模型重试', 'llm.retry-started':'开始重试', 'message.received':'收到消息', 'message.sent':'确认发送',
-      'router.assess':'路由评估', 'router.evaluate':'路由评估', 'router.decision':'路由决策', 'router.dispatch':'路由执行',
+      'router.archived':'协调运行已归档', 'router.archive_retry':'协调归档待重试', 'router.assess':'路由评估', 'router.evaluate':'路由评估', 'router.decision':'路由决策', 'router.dispatch':'路由执行',
       dispatch:'分派执行', 'task.prompt':'任务请求', 'task.result':'任务结果', timer:'定时触发', error:'错误',
       tool_call:'工具调用', tool_result:'工具结果', turn_start:'回合开始', turn_end:'回合结束', text:'模型输出', retry:'重试', inbound:'收到消息', outbound:'确认发送'
     };
@@ -92,7 +92,7 @@ window.__ModuleLoader__.load({
         error&&h('p',{className:'ck-error',role:'alert'},error,'。可点击刷新重试；已有数据保留。'),
         tab==='overview' ? h(React.Fragment,null,
           h('div',{className:'ck-grid'},card('运行状态',overview.status,overview.note),card('模型',overview.model,'当前模型配置'),card('执行会话',data?.sessions?.length??'—','独立会话，按来源关联')),
-          h('div',{className:'ck-grid'},h('article',{className:'ck-card ck-wide'},h('h3',null,'会话与来源'),...(data?.sessions||[]).map((s,i)=>h('div',{className:'ck-session',key:s.sessionId||i},h('div',{className:'ck-row'},h('span',{className:'ck-tag'},roleLabel(s.role)),h('span',null,s.channel||'未标注来源')),h('div',{className:'ck-links'},h('button',{onClick:()=>correlate('sessionId',s.sessionId)},s.sessionId)))),!data?.sessions?.length&&h('p',{className:'muted'},busy?'正在读取…':'暂无会话记录')),
+          h('div',{className:'ck-grid'},h('article',{className:'ck-card ck-wide'},h('h3',null,'会话与来源'),...(data?.sessions||[]).map((s,i)=>h('div',{className:'ck-session',key:s.sessionId||i},h('div',{className:'ck-row'},h('span',{className:'ck-tag'},roleLabel(s.role)),h('span',null,s.channel||'未标注来源')),h('div',{className:'ck-links'},h('button',{onClick:()=>correlate('sessionId',s.sessionId)},s.role==='router'?'查看协调运行记录':s.sessionId)))),!data?.sessions?.length&&h('p',{className:'muted'},busy?'正在读取…':'暂无会话记录')),
           h('article',{className:'ck-card'},h('h3',null,'运行计数'),h('dl',{className:'ck-dl'},...Object.entries(data?.counts||{}).map(([k,v])=>h('div',{key:k},h('dt',null,countLabel(k)),h('dd',null,typeof v==='object'?pretty(v):String(v))))),data?.tasks?.length>0&&details(data.tasks))),
           health&&typeof health==='object'&&h('article',{className:'ck-card'},h('h3',null,'实例详情'),details(health))) : h(React.Fragment,null,
           h('form',{className:'ck-filters',onSubmit:e=>{e.preventDefault();setFilters({...draft});}},

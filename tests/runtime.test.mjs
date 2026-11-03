@@ -9,15 +9,16 @@ import { createRuntime } from '../host/runtime.mjs';
 const incoming = (id, channel, meta = {}) => ({ id, kind: 'message.received', channel, actorId: '10001', text: id, meta: { addressed: true, messageId: id, ...meta } });
 async function until(condition) { for (let n = 0; n < 400; n++) { if (condition()) return; await delay(5); } assert.fail('Runtime condition timed out'); }
 
-async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000, ownerId } = {}) {
+async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000, ownerId,hangModel=false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chopsticks-runtime-'));
   const fishHome = path.join(dir, 'fish'), stateDir = path.join(dir, 'state');
   fs.mkdirSync(path.join(fishHome, 'characters', 'fish'), { recursive: true });
   fs.writeFileSync(path.join(fishHome, 'characters', 'current.json'), JSON.stringify({ id: 'fish' }));
   fs.writeFileSync(path.join(fishHome, 'characters', 'fish', 'persona.md'), 'Fixture fish persona');
-  const assessments = [], deliveries = [], sends = [], cancels = [];
+  const assessments = [], deliveries = [], sends = [], cancels = [], archived = [], released = [];
   let runtime, adapterOptions;
   const controller = {
+    async selectModel({sessionId}){if(hangModel&&sessionId.startsWith('chopsticks-router-'))return new Promise(()=>{});},
     async inspect(sessionId) { return { sessionId }; }, async resolveAgent() {},
     async prompt(input, signal) {
       assert.equal(input.mode, 'queue'); assert.ok(signal instanceof AbortSignal);
@@ -40,11 +41,26 @@ async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePro
       },
     };
   };
-  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false, ownerId }, bili: { enabled: false }, routerTimeoutMs: timeoutMs }, controller, adapterFactory });
+  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false, ownerId }, bili: { enabled: false }, routerTimeoutMs: timeoutMs,...(hangModel?{model:{provider:'fixture',model:'fixture'}}:{}) }, controller, adapterFactory,...(hangModel?{createRouterSession:async()=>{}}:{}),archiveRouterSession:async id=>archived.push(id),releaseRouterSession:async id=>released.push(id) });
   await runtime.start();
   t.after(async () => { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  return { runtime, assessments, deliveries, sends, cancels, adapterOptions };
+  return { runtime, assessments, deliveries, sends, cancels, adapterOptions,archived,released };
 }
+
+test('completed router evaluations archive and release; console keeps one logical coordinator and durable trace access',async t=>{
+ const f=await fixture(t);
+ for(const id of ['one','two']){await f.runtime.ingest(incoming(id,'g:1'));await until(()=>f.deliveries.length===(id==='one'?1:2));}
+ await until(()=>f.archived.length===2);assert.deepEqual(f.released,f.archived);
+ const overview=await f.runtime.queryConsole('overview');assert.equal(overview.sessions.filter(s=>s.role==='router').length,1);assert.equal(overview.sessions.find(s=>s.role==='router').sessionId,'chopsticks-router');
+ const traces=f.runtime.queryConsole('traces',{sessionId:'chopsticks-router'}).items;assert.equal(traces.filter(r=>r.kind==='router.decision').length,2);
+ assert.equal(f.runtime.queryConsole('events',{sessionId:'chopsticks-router'}).items.length,2);
+ assert.equal(f.deliveries[0].sessionId,f.deliveries[1].sessionId);
+});
+test('model initialization timeout still retires each created router session',async t=>{
+ const f=await fixture(t,{hangModel:true,timeoutMs:20});await f.runtime.ingest(incoming('model-hangs','g:1'));
+ await until(()=>f.runtime.router.status().counts.failed===1);await until(()=>f.archived.length===2);
+ assert.equal(f.released.length,2);assert.equal(f.assessments.length,0);assert.ok(f.runtime.state.list('router-session').every(r=>r.status==='archived'));
+});
 
 test('runtime refreshes a group dispatch with self facts confirmed while assessment was running', async t => {
   const f = await fixture(t, { autoDecide: false });

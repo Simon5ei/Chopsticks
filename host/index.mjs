@@ -7,15 +7,16 @@ import {hash} from './state.mjs';
 import {validationAdapter} from './validation.mjs';
 import {createBiliService} from '../bili/mcp/service.mjs';
 import {createMemory} from './memory.mjs';
+import {createRouterNative} from './router-native.mjs';
 
 export const name='chopsticks';
-export const inject=['tools','sessionController'];
+export const inject=['tools','sessionController','workspaceRegistry','agents','agentPresets'];
 function hostRequire(){for(const file of [process.env.DSH_RUNTIME_PACKAGE,process.argv[1]].filter(Boolean))try{const req=createRequire(fs.realpathSync(file));req.resolve('@deepseek-ai/dsh-tools');return req;}catch{}throw Error('DSH native tools unavailable');}
 export async function apply(ctx){
  const file=process.env.CHOPSTICKS_CONFIG;if(!file)throw Error('CHOPSTICKS_CONFIG must point to an external config');
  const config=readJSON(file);if(!config.stateDir||!config.fishHome)throw Error('Missing external Chopsticks data roots');
  const req=hostRequire(),host=req('@deepseek-ai/dsh-tools'),mcp=req('@deepseek-ai/dsh-mcp-client');
- const runtime=await createRuntime({config,logger:{info:message=>console.info(message)},controller:ctx.sessionController,getAgent:id=>ctx.get('agents')?.get(id),...(config.validation?{adapterFactory:validationAdapter}:{})});
+ const runtime=await createRuntime({config,...createRouterNative(ctx,config.model),logger:{info:message=>console.info(message)},controller:ctx.sessionController,getAgent:id=>ctx.get('agents')?.get(id),...(config.validation?{adapterFactory:validationAdapter}:{})});
  registerConsole(ctx,runtime);
  const memory=createMemory({fishHome:config.fishHome,state:runtime.state,store:runtime.store});
  const bili=createBiliService({fishHome:config.fishHome});const disposers=[];
