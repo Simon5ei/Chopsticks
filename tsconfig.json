@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist",
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "moduleDetection": "force",
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "sourceMap": true,
+    "noUnusedLocals": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": [
+    "src/**/*.mts",
+    "src/**/*.ts",
+    "src/**/vendor/*.mjs",
+    "src/**/vendor/*.cjs",
+    "tests/**/*.mts",
+    "types/**/*.d.ts",
+    "src/vendor/**/*.mjs",
+    "src/vendor/**/*.mjs",
+    "scripts/**/*.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

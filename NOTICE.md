@@ -1,5 +1,7 @@
 # Source attribution
 
+Path convention after TypeScript migration: code paths below name the deployed release layout. Maintained source uses the same paths under `src/`, with owned Node modules in `.mts` and browser scripts in `.ts`; upstream vendor files and Python keep their original extensions. License texts are unchanged.
+
 Copyright (c) 2026 Simon5ei and Chopsticks contributors.
 
 Chopsticks-authored code is licensed under GPL-3.0-only as of 2026-11-03; see `LICENSE`. This aligns the project's main license with MaiBot's GPLv3 ecosystem. No MaiBot plugin implementation has been imported by this license change.

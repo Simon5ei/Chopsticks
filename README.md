@@ -2,13 +2,15 @@
 
 让大肥鱼更方便地“吃白饭”。基于 DSH 的持续在线、事件驱动角色运行时。
 
+项目自有代码使用 TypeScript，构建为 Node 24 ESM；源码在 `src/`，部署产物在 `dist/release/`。[文档导航](docs/README.md) · [开发与构建](docs/development.md)
+
 这是从实际养鱼需求重新组织的独立项目。保留 QQ 聊天、人设和记忆、B站阅读与受控互动、后台阅读任务；不安装 SurfCore，不依赖 SessionCross。
 
 项目主许可为 [GPL-3.0-only](LICENSE)，与 MaiBot 的 GPLv3 生态对齐。第三方代码保留各自的许可证和署名；此前已按 MIT 发布的代码保留原授权。详见 [来源与许可说明](NOTICE.md)。
 
 ## 已部署架构
 
-[按消息处理顺序查看完整架构](docs/architecture-deployed.md) · [矢量图](docs/diagrams/chopsticks-deployed.svg) · [可编辑图源](docs/diagrams/chopsticks-deployed.excalidraw)
+[按消息处理顺序查看完整架构](docs/architecture/overview.md) · [矢量图](docs/diagrams/chopsticks-deployed.svg) · [可编辑图源](docs/diagrams/chopsticks-deployed.excalidraw)
 
 ![筷子已部署架构](docs/diagrams/chopsticks-deployed.png)
 
@@ -25,10 +27,10 @@
 - QQ 确认发送、引用、图片、合并转发、潜水、已读水位、记忆检索和追加；纯文字输出不会自动发到群里。
 - 九个 B站 MCP 工具：元数据、搜索、字幕、评论读取、动态读取、观看历史、真实抽帧、受控评论和动态发布。
 - 独立网页搜索/读取 MCP；受控网络访问和凭据脱敏。
-- 可选接入 MaiBot 原版日期/节日与萌娘百科 Python 工具，并提供持久提醒：到期进入同一个 Router，按来源和发信人隔离，发送继续取得平台回执。默认关闭，不启动完整 MaiBot；见 [接入说明](maibot/README.md)。
+- 可选接入 MaiBot 原版日期/节日与萌娘百科 Python 工具，并提供持久提醒：到期进入同一个 Router，按来源和发信人隔离，发送继续取得平台回执。默认关闭，不启动完整 MaiBot；见 [接入说明](docs/guides/maibot.md)。
 - SQLite 保存事件、发送意图、任务和轻量记忆。不确定发送不会自动重试；停机恢复不会凭空声称操作成功。
-- DSH **设置 → 筷子** 提供运行概览、事件链路、模型思考与工具追踪、运行日志；支持来源筛选和脱敏 JSONL 导出。见 [控制台说明](docs/console.md)。
-- 启用管理员开发后，可在 QQ 用自然语言下达机器操作：接待会话核验真实管理员来源，再派独立开发 Worker 执行服务器命令、验证并回传结果。普通成员、B站资料与后台阅读任务不具备命令权限。见 [管理员开发](docs/admin-development.md)。
+- DSH **设置 → 筷子** 提供运行概览、事件链路、模型思考与工具追踪、运行日志；支持来源筛选和脱敏 JSONL 导出。见 [控制台说明](docs/guides/console.md)。
+- 启用管理员开发后，可在 QQ 用自然语言下达机器操作：接待会话核验真实管理员来源，再派独立开发 Worker 执行服务器命令、验证并回传结果。普通成员、B站资料与后台阅读任务不具备命令权限。见 [管理员开发](docs/guides/admin-development.md)。
 
 ## 有意精简
 
@@ -43,19 +45,21 @@ SessionCross 保留为未来跨机器调度插件的基础，与本项目解耦�
 ```sh
 npm ci --ignore-scripts
 npm test
-CHOPSTICKS_FISH_HOME=/var/lib/chopsticks/fish node bili/mcp/server.mjs
-CHOPSTICKS_CONFIG=/var/lib/chopsticks/config.json node web/server.mjs
+CHOPSTICKS_FISH_HOME=/var/lib/chopsticks/fish node dist/release/bili/mcp/server.mjs
+CHOPSTICKS_CONFIG=/var/lib/chopsticks/config.json node dist/release/web/server.mjs
 ```
 
-DSH profile 将本包加入 `dependencies` 和 `dsh.profile.bundles`，由 `presets/runtime.patch.yml` 注册宿主及角色预设。配置、凭据、角色、SQLite 与真实聊天日志全部放源码目录之外。参考 [部署说明](docs/deployment.md) 和 [配置示例](config.example.json)。
+DSH profile 将本包加入 `dependencies` 和 `dsh.profile.bundles`，由 `presets/runtime.patch.yml` 注册宿主及角色预设。配置、凭据、角色、SQLite 与真实聊天日志全部放源码目录之外。参考 [部署说明](docs/operations/deployment.md) 和 [配置示例](config.example.json)。
 
-日常开发与候选清单统一使用 `/root/workspace/dsh`，具体目录和两个调研日程见 [工作区说明](docs/workspace.md)。
+后文的运维 CLI 命令以部署目录 `/opt/chopsticks` 为工作目录；本地对应 `dist/release/`。不要从源码目录直接运行旧的 `.mjs` 路径。
+
+日常开发与候选清单统一使用 `/root/workspace/dsh`，具体目录和两个调研日程见 [工作区说明](docs/operations/workspace.md)。
 
 ## 实现与验收
 
-[事件与 Router](core/README.md) · [B站接口](bili/README.md) · [网页接口](web/README.md) · [设计](docs/design.md) · [来源](NOTICE.md)
+[事件与 Router](docs/guides/core.md) · [B站接口](docs/guides/bili.md) · [网页接口](docs/guides/web.md) · [设计](docs/design.md) · [来源](NOTICE.md)
 
-测试覆盖持久去重、未知结果恢复、跨群新事实、私聊隔离、并发取消、后台任务、账号/目标校验以及真实 MCP stdio。模型验收使用隔离传输；管理员明确授权的平台实发测试另走操作员入口，保存源码版本、发送意图和真实回读证据。参见 [真实平台回归](docs/live-tests.md)。
+测试覆盖持久去重、未知结果恢复、跨群新事实、私聊隔离、并发取消、后台任务、账号/目标校验以及真实 MCP stdio。模型验收使用隔离传输；管理员明确授权的平台实发测试另走操作员入口，保存源码版本、发送意图和真实回读证据。参见 [真实平台回归](docs/operations/live-tests.md)。
 
 
 ## 分层 Router 与生活平台

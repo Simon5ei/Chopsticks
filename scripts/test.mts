@@ -1,0 +1,13 @@
+import {spawnSync} from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {commandExitStatus} from './process-result.mts';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const build=spawnSync(process.execPath,['scripts/build.mts'],{cwd:root,stdio:'inherit',timeout:180000,windowsHide:true});
+if(build.error||build.status!==0)process.exit(build.status||1);
+const tests=fs.readdirSync(path.join(root,'dist/tests')).filter(name=>name.endsWith('.test.mjs')).map(name=>'dist/tests/'+name);
+if(tests.length>150)throw Error('Test file budget exceeded');
+const result=spawnSync(process.execPath,['--max-old-space-size=640','--test','--test-concurrency=1','--test-timeout=30000',...tests],{cwd:root,stdio:'inherit',env:{...process.env,CHOPSTICKS_SOURCE_ROOT:root},timeout:240000,windowsHide:true});
+if(result.error)console.error(result.error.message);
+process.exit(commandExitStatus(result));

@@ -7,11 +7,11 @@
   "engines": {
     "node": ">=24.0.0"
   },
-  "main": "./host/index.mjs",
+  "main": "./dist/src/host/index.mjs",
   "exports": {
-    ".": "./host/index.mjs",
-    "./guard": "./host/guard.mjs",
-    "./client": "./console/client.js"
+    ".": "./dist/src/host/index.mjs",
+    "./guard": "./dist/src/host/guard.mjs",
+    "./client": "./dist/src/console/client.js"
   },
   "dsh": {
     "bundle": {
@@ -28,8 +28,11 @@
     }
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "test:audit": "node --test tests/*.test.mjs"
+    "build": "node scripts/build.mts",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mts",
+    "test:audit": "npm test",
+    "release": "node scripts/build.mts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -39,5 +42,12 @@
     "ws": "^8.18.0",
     "zod": "^4.4.3"
   },
-  "license": "GPL-3.0-only"
+  "license": "GPL-3.0-only",
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "24.19.2",
+    "@types/qrcode": "1.5.6",
+    "@types/ws": "8.18.2",
+    "typescript": "5.9.3"
+  }
 }
