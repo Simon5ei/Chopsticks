@@ -13,10 +13,12 @@ sudo systemd-run --wait --pipe --collect \
   -p MemoryMax=1G -p MemorySwapMax=0 -p CPUQuota=50% \
   -p TasksMax=32 -p RuntimeMaxSec=300 -p KillMode=control-group \
   --working-directory=/opt/chopsticks-candidate \
-  /opt/node24/bin/node --test --test-concurrency=1 --test-timeout=30000 tests/*.test.mjs
+  /opt/node24/bin/node --test --test-concurrency=1 --test-timeout=30000 dist/tests/*.test.mjs
 ```
 
 Use a concrete candidate directory containing compiled tests and their dependencies. The release tree itself intentionally has no tests. SSH timeout alone is insufficient. Stop on pressure, timeout or connectivity loss; do not broaden the workload.
+
+On a small server, build and test in separate bounded units. Set `UV_THREADPOOL_SIZE=1` and `NODE_OPTIONS='--max-old-space-size=640 --v8-pool-size=1'` to avoid multiplying idle threads through nested npm/Node processes. Build with `node scripts/build.mts`, then run the compiled files in `dist/tests/` directly with the serial test flags above and `CHOPSTICKS_SOURCE_ROOT` pointing to the candidate checkout. Enumerate at most 150 test files before execution. Keep the build deadline at 195 seconds and test deadline at 255 seconds; investigate failures before repeating them.
 
 Real DSH/model acceptance uses a separate private DSH home, `validation:true`, fake QQ transport, disabled publishing and isolated state. Verify confirmed public cross-group recall, private exclusion and background task completion. Do not reuse production native sessions. Ordinary deployment performs no synthetic platform posts or private-message tests.
 
