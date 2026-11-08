@@ -36,3 +36,15 @@ test('native resume result errors prohibit prompt admission',async()=>{
  const executor=createDshExecutor({controller:{async resolveAgent(){return {error:failure};},async prompt(){assert.fail('missing native agent');}}});
  await assert.rejects(()=>executor.prompt({sessionId:'worker',text:'fixture',deliveryId:'prompt:fixture'}),e=>e===failure);
 });
+
+test('new development workers isolate cwd by stable ticket while restored sessions stay put',async t=>{
+ const workerRoot=fs.mkdtempSync(path.join(os.tmpdir(),'dev-worker-root-'));t.after(()=>fs.rmSync(workerRoot,{recursive:true,force:true}));const created=[];
+ const executor=createDshExecutor({workerRoot,resolveWorker:()=>({mode:'development'}),controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(r){created.push(r);return {sessionId:r.sessionId};}}});
+ await executor.ensureSession({sessionId:'dev-a',ticket:{id:'ticket-a'}});await executor.ensureSession({sessionId:'dev-b',ticket:{id:'ticket-b'}});
+ assert.notEqual(created[0].cwd,workerRoot);assert.notEqual(created[0].cwd,created[1].cwd);assert.equal(path.dirname(created[0].cwd),path.join(workerRoot,'tasks'));
+});
+
+test('missing attached native agent is unknown rather than proof of idle',async()=>{
+ const executor=createDshExecutor({controller:{},getAgent:()=>undefined});
+ assert.deepEqual(await executor.isRunning({sessionId:'cold'}),{running:null,pending:null});
+});

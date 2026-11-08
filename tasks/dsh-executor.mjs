@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
 const missing = error => ['session/not-found','SESSION_QUERY_SESSION_NOT_FOUND'].includes(error?.code) || error?.name==='ApiSessionNotFound' || error?.constructor?.name==='ApiSessionNotFound';
 export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,getAgent=()=>null,onResult,resolveWorker=()=>({mode:'research'})}) {
   const signal=new AbortController().signal;
@@ -37,7 +39,7 @@ export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,
       try {await controller.inspect(sessionId);}
       catch(error){
         if(!missing(error))throw error;
-        const cwd=workerRoot;
+        const cwd=resolveWorker(sessionId).mode==='development' ? path.join(workerRoot,'tasks',createHash('sha256').update(ticket?.id ?? sessionId).digest('hex').slice(0,32)) : workerRoot;
         fs.mkdirSync(cwd,{recursive:true,mode:0o700});
         check();const workspaceId=await prepareWorkspace?.({cwd,title:'后台任务'});check();
         const created=await controller.create({sessionId,...workspaceId?{workspaceId}:{cwd},agentPreset:resolveWorker(sessionId).mode==='development'?'chopsticks-development-worker':'chopsticks-research-worker'});
@@ -65,7 +67,7 @@ export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,
       }
       try {return controller.cancel({sessionId});}catch(error){if(!missing(error))throw error;return {accepted:true};}
     },
-    isRunning:({sessionId})=>({running:getAgent(sessionId)?.status==='running',pending:Boolean(getAgent(sessionId)?.inbox?.nextTurn?.length||getAgent(sessionId)?.inbox?.nextStep?.length)}),
+    isRunning:({sessionId})=>{const agent=getAgent(sessionId);return agent ? {running:agent.status==='running',pending:Boolean(agent.inbox?.nextTurn?.length||agent.inbox?.nextStep?.length)} : {running:null,pending:null};},
     inspect,
     deliverResult:({sessionId,text,deliveryId,signal:deliverySignal,isStillAuthorized,ticketId,origin})=>{
       if(deliverySignal?.aborted || isStillAuthorized?.()===false)return {accepted:false};

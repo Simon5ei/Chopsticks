@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Engine } from './vendor/engine.mjs';
 import { createStore } from './store.mjs';
+import { publicChannel } from '../core/platforms.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value, name, max = 12000) => {
@@ -10,12 +11,12 @@ const text = (value, name, max = 12000) => {
 const latest = ticket => ticket.assignments.at(-1);
 
 /** Authority comes only from the host's session resolver, never tool arguments. */
-export function createCoordinator({ stateDir, executor, deliverResult, inspectDelivery, maxConcurrency = 2, autoStart = true }) {
+export function createCoordinator({ stateDir, executor, deliverResult, inspectDelivery, maxConcurrency = 2, autoStart = true, resolveTaskMode = () => undefined }) {
   if (!executor?.ensureSession || !executor?.prompt || !executor?.abort || !deliverResult) throw new Error('Coordinator requires executor and result delivery ports');
   maxConcurrency = Math.max(1, Math.min(2, Number(maxConcurrency) || 2));
   const store = createStore(stateDir), { repo, effects } = store;
   const inFlight = new Map();
-  let closed = false, pumping, scheduled, timer, clock = 0, recovered = false;
+  let closed = false, pumping, scheduled, timer, clock = 0, recovered = false, supervising;
   const origin = ticket => repo.triggers.get(ticket.origin.triggerId).meta.caller;
   const cancelled = ticket => !ticket || store.get('cancelled', ticket.id) || ticket.ended?.by === 'human';
   const live = effect => {
@@ -29,7 +30,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
       const binding = store.get('worker', caller.sessionId);
       if (!binding || binding.chatKey !== caller.chatKey || binding.characterId !== caller.characterId) throw new Error('Unknown worker scope');
     }
-    return { sessionId: caller.sessionId, chatKey: caller.chatKey, characterId: caller.characterId, role: caller.role, canWrite: false };
+    return { sessionId: caller.sessionId, chatKey: caller.chatKey, characterId: caller.characterId, role: caller.role, admin: caller.admin === true, ...caller.role === 'worker' ? { assignmentId: caller.assignmentId } : {}, canWrite: false };
   }
   function visible(caller, ticket) {
     if (caller.role === 'operator') return true;
@@ -50,6 +51,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     return { id: ticket.id, state: cancelled(ticket) ? 'stopped' : ticket.ended?.outcome ?? assignment?.report?.state ?? assignment?.state ?? 'pending',
       summary: assignment?.report?.summary ?? '', workerSessionId: worker?.sessionId,
       origin: origin(ticket), createdAt: ticket.createdAt, updatedAt: ticket.updatedAt,
+      supervision: store.get('supervision',ticket.id),
       ...source.sourceEventId ? {source:{eventId:source.sourceEventId,threadId:source.sourceThreadId}} : {},
       subscriptions:store.list('source-thread').filter(row=>repo.threads.get(row.key)?.subscriptions.includes(ticket.id)).map(({threadId,chatKey,characterId})=>({threadId,chatKey,characterId})),
       deliveryState: pending.some(e => e.state === 'uncertain') ? 'uncertain' : pending.length ? 'pending' : 'settled' };
@@ -60,7 +62,10 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
   }
   function queue(effect) { effects.queue(effect); schedule(); }
   function workerBinding(ticket, assignment) {
-    const sessionId = `chopsticks-worker-${hash(assignment.id).slice(0, 32)}`;
+    const existing = store.list('worker').find(w => w.ticketId === ticket.id);
+    const sessionId = existing?.sessionId ?? `chopsticks-worker-${hash(ticket.id).slice(0, 32)}`;
+    // A stop for an old assignment must never rebind the stable session backwards.
+    if (existing && latest(ticket)?.id !== assignment.id) return { ...existing, assignmentId: assignment.id };
     const binding = { ...origin(ticket), sessionId, originSessionId: origin(ticket).sessionId,
       role: 'worker', canWrite: false, ticketId: ticket.id, assignmentId: assignment.id };
     store.put('worker', sessionId, binding);
@@ -147,8 +152,10 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
       if(request&&(request.eventKey!==eventKey||request.digest!==digest))throw Error('Source request ID conflict');
       if(previous){if(previous.digest!==digest)throw Error('Source event conflict');store.put('source-request',requestKey,{eventKey,digest});return view(previous);}
       if(ticketId){
-        const ticket=requireTask(caller,ticketId),owner=origin(ticket);
-        if(owner.chatKey!==caller.chatKey||owner.characterId!==caller.characterId)throw Error('Task not found in caller scope');
+        const ticket=repo.tickets.get(ticketId);
+        if(!ticket || !(decision==='attach' ? knowledgeVisible(caller,ticket) : visible(caller,ticket)))throw Error('Task not found in caller scope');
+        const owner=origin(ticket);
+        if((owner.chatKey!==caller.chatKey||owner.characterId!==caller.characterId) && (decision!=='attach'||caller.role==='operator'||owner.role==='operator'))throw Error('Task not found in caller scope');
         if(decision==='attach'&&cancelled(ticket))throw Error('Task stopped');
       }
       const nativeThreadId=`source-thread:${hash([caller.characterId,caller.chatKey,threadId])}`;
@@ -158,7 +165,11 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
       store.put('source-thread',nativeThreadId,{key:`chopsticks:${nativeThreadId}`,threadId,chatKey:caller.chatKey,characterId:caller.characterId});
       engine.receive(input);
       let target=ticketId;
-      if(decision==='attach')engine.attach(ticketId,input.id);
+      if(decision==='attach') {
+        const owner=origin(repo.tickets.get(ticketId));
+        if(owner.chatKey!==caller.chatKey)engine.note(ticketId,`[context-only; no operation authority; source event=${eventId}; thread=${threadId}; channel=${caller.chatKey}]\n${body}`);
+        else engine.attach(ticketId,input.id);
+      }
       else {
         const routed=engine.decide(input.id,decision==='accept'?{kind:'accept',title:'Chopsticks source task',scope:'Read-only research and origin-scoped recall',reason:'Explicit host Router decision'}:{kind:decision,reason:'Explicit host Router decision',...ticketId?{ticketId}:{}});
         if(decision==='accept'){target=routed.ticketId;if(!target)throw Error('Engine did not accept source task');}
@@ -181,7 +192,9 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
       return project(requireTask(caller, previous.ticketId));
     }
     return store.atomic(() => {
-      engine.receive(trigger(caller, id, prompt, id));
+      const input=trigger(caller, id, prompt, id);
+      input.meta.mode=args.development===true?'development':'research';
+      engine.receive(input);
       const decision = engine.decide(id, { kind: 'accept', title: 'Chopsticks delegated reading task', scope: 'Read-only public research and origin-scoped recall', reason: 'Explicit task tool request' });
       if (!decision.ticketId) throw new Error('Engine did not accept task');
       store.put('request', id, { ticketId: decision.ticketId, promptHash: hash(prompt) });
@@ -214,7 +227,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
   async function report(caller, { ticketId, state, summary, deliveryId }) {
     caller = validateCaller(caller);
     const ticket = requireTask(caller, ticketId), worker = store.get('worker', caller.sessionId);
-    if (caller.role !== 'worker' || worker?.ticketId !== ticketId || worker.assignmentId !== latest(ticket)?.id) throw new Error('Worker is not bound to this assignment');
+    if (caller.role !== 'worker' || worker?.ticketId !== ticketId || worker.assignmentId !== latest(ticket)?.id || caller.assignmentId && caller.assignmentId !== worker.assignmentId) throw new Error('Worker is not bound to this assignment');
     if (cancelled(ticket)) throw new Error('Task stopped');
     if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(state)) throw new Error('Invalid report state');
     summary = text(summary, 'summary', 10000);
@@ -347,6 +360,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     closed = true; clearImmediate(scheduled); clearTimeout(timer);
     for (const controller of inFlight.values()) controller.abort();
     if (pumping) await pumping;
+    if (supervising) await supervising;
     store.close();
   }
   async function workerEnded(sessionId, { failed = false, restarted = false } = {}) {
@@ -364,8 +378,55 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     });
     schedule(); return project(repo.tickets.get(ticket.id));
   }
+  const mode = ticket => resolveTaskMode(ticket.id) ?? repo.triggers.get(ticket.origin.triggerId)?.meta.mode ?? 'research';
+  function knowledgeVisible(caller, ticket) {
+    if (visible(caller, ticket)) return true;
+    const owner=origin(ticket);
+    return caller.role !== 'worker' && caller.role !== 'operator' && owner.role !== 'operator'
+      && caller.characterId === owner.characterId && publicChannel(caller.chatKey) && publicChannel(owner.chatKey) && mode(ticket)==='research';
+  }
+  async function knowledge(caller, {query='',id,limit=10}={}) {
+    caller=validateCaller(caller);
+    const detail=ticket=>{const p=project(ticket);return {id:p.id,state:p.state,summary:p.summary.slice(0,1500),createdAt:p.createdAt,updatedAt:p.updatedAt,mode:mode(ticket),source:p.source,origin:{chatKey:origin(ticket).chatKey},prompt:repo.triggers.get(ticket.origin.triggerId).text.slice(0,4000)};};
+    if(id){const ticket=repo.tickets.get(text(id,'task ID',512));if(!ticket||!knowledgeVisible(caller,ticket))throw Error('Task not found in caller scope');return detail(ticket);}
+    if(typeof query!=='string'||query.length>500)throw Error('Invalid query');
+    limit=Math.max(1,Math.min(20,Number(limit)||10));
+    return repo.tickets.list().filter(t=>knowledgeVisible(caller,t)).map(detail).filter(t=>!query||`${t.prompt} ${t.summary}`.toLowerCase().includes(query.toLowerCase())).slice(0,limit).map(({prompt,...row})=>({...row,summary:row.summary||prompt.slice(0,300)}));
+  }
+  async function superviseOnce({now=Date.now(),staleMs=300000,cooldownMs=300000,limit=25}={}) {
+    if(!Number.isFinite(now)||!Number.isFinite(staleMs)||!Number.isFinite(cooldownMs))throw Error('Invalid supervision clock');
+    const result={checked:0,actions:[],attention:[]};
+    for(const ticket of repo.tickets.open().slice(0,Math.max(1,Math.min(100,Number(limit)||25)))) {
+      if(cancelled(ticket)||now-Date.parse(ticket.updatedAt)<Math.max(1,staleMs))continue;
+      result.checked++;
+      const previous=store.get('supervision',ticket.id);
+      if(previous && now-previous.at<Math.max(1,cooldownMs))continue;
+      const assignment=latest(ticket),worker=store.list('worker').find(w=>w.ticketId===ticket.id && w.assignmentId===assignment?.id);
+      const pending=effects.list().filter(e=>e.ticketId===ticket.id&&!['done','dropped'].includes(e.state));
+      let state;try{if(worker && executor.isRunning)state=await executor.isRunning({sessionId:worker.sessionId});}catch{}
+      if(closed || cancelled(repo.tickets.get(ticket.id)) || latest(repo.tickets.get(ticket.id))?.id!==assignment?.id)continue;
+      if(state?.running===true || state?.pending===true) {
+        if(!previous?.statusRequested && assignment?.report?.state==='waiting') {store.atomic(()=>{engine.requestStatus(ticket.id);store.put('supervision',ticket.id,{...previous,at:now,statusRequested:true});});result.actions.push({ticketId:ticket.id,action:'status'});}
+        continue;
+      }
+      const safe=mode(ticket)==='research' && state?.running===false && state?.pending===false && !pending.length && !previous?.resumed;
+      if(safe) {
+        store.atomic(()=>{store.put('supervision',ticket.id,{...previous,at:now,resumed:true});engine.turnEnded(ticket.id,assignment.id);engine.note(ticket.id,'Continue the interrupted read-only research task from its existing evidence. Do not repeat external effects.');});
+        result.actions.push({ticketId:ticket.id,action:'resume'});
+      } else {
+        const attention={ticketId:ticket.id,at:now,reason:mode(ticket)==='development'?'development_requires_review':pending.length?'unresolved_effect':'recovery_requires_review'};
+        store.put('supervision',ticket.id,{...previous,at:now,attention});result.attention.push(attention);
+      }
+    }
+    schedule();return result;
+  }
+  function supervise(options) {
+    if(closed)return Promise.resolve({checked:0,actions:[],attention:[]});
+    if(!supervising)supervising=superviseOnce(options).finally(()=>{supervising=undefined;});
+    return supervising;
+  }
   schedule();
-  return { submit, routeSource, follow, status, stop, report, workerEnded, flush, close,
+  return { knowledge, supervise, submit, routeSource, follow, status, stop, report, workerEnded, flush, close,
     start(){if(!closed){autoStart=true;schedule();}},
     getWorkerContext(sessionId) {
       const worker = store.get('worker', sessionId), ticket = worker && repo.tickets.get(worker.ticketId);
