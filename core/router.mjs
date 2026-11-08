@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { redact } from './events.mjs';
+import { createBatching } from './batching.mjs';
 import {platformRoute} from './platforms.mjs';
 
 const terminal = ['observed', 'dispatched', 'failed', 'uncertain'];
 
-export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs = 30000,hierarchy,mood }) {
+export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs = 30000,hierarchy,mood,batchWindowMs=0,onBatch,urgent }) {
   if (!store?.db || typeof assess !== 'function' || typeof dispatch !== 'function') throw new TypeError('store, assess and dispatch are required');
   const db = store.db;
   const settings = typeof policy === 'object' && policy ? policy : {};
@@ -26,6 +27,8 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
   if(hierarchy)for(const row of db.prepare('SELECT DISTINCT e.channel FROM core_events e JOIN core_router_domains d ON d.event_id=e.id').all()){
     const route=platformRoute(row.channel);db.prepare('UPDATE core_router_domains SET domain=?,platform=?,session_key=? WHERE event_id IN (SELECT id FROM core_events WHERE channel=?)').run(route.domain,route.platform,route.sessionKey,row.channel);
   }
+  const batchLimit=(value,fallback,max)=>Number.isFinite(value)?Math.max(1,Math.min(max,Math.floor(value))):fallback;
+  const batching=Number.isFinite(batchWindowMs)&&batchWindowMs>0?createBatching({store,windowMs:batchLimit(batchWindowMs,3000,60000),urgent,maxEvents:batchLimit(settings.batchMaxEvents,16,32),maxChars:batchLimit(settings.batchMaxChars,12000,12000)}):null;
   let attentionDomain,attentionBurst=0;
   const platformCache=new Map();
   let closed = false, running = false, scheduled, active = null, pumpPromise = Promise.resolve();
@@ -56,8 +59,17 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
      const route=platformRoute(row);db.prepare('INSERT OR IGNORE INTO core_router_domains VALUES(?,?,?,?)').run(row.id,route.domain,route.platform,route.sessionKey);
     }
   }
+  function admitEvent(event,options={}) {
+    if(!batching)return;
+    if(event.kind==='message.sent'||!allowed(event)){update(event.id,'observed',event.kind==='message.sent'?null:'policy_blocked');return;}
+    batching.admit(event,options);
+  }
+  function admitPending() {
+    if(batching)for(const row of db.prepare("SELECT r.event_id FROM core_router r LEFT JOIN core_batch_members m ON m.event_id=r.event_id WHERE r.state='pending' AND m.event_id IS NULL ORDER BY r.seq").all())admitEvent(store.get(row.event_id));
+  }
   function schedule(ms = 0) {
-    if (closed || scheduled || running) return;
+    if (closed || running) return;
+    if(scheduled){clearTimeout(scheduled);scheduled=undefined;}
     scheduled = setTimeout(() => {
       scheduled = undefined;
       pumpPromise = pump().catch(() => { error('router_internal_error', []); });
@@ -95,7 +107,7 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
     // Persist intent before invoking any external side effect. No automatic replay beyond here.
     update(event.id, 'dispatching');
     try {
-      await boundedCall('dispatch', [event.id], signal => dispatch(action, event, freshContext(event.channel, signal)));
+      await boundedCall('dispatch', [event.id], signal => dispatch(action, event, { ...freshContext(event.channel, signal),...batching?{batch:batching.describe(event.id)}:{} }));
       update(event.id, 'dispatched');
     } catch (cause) {
       const code = cause?.code === 'dispatch_timeout' ? 'dispatch_timeout' : closed ? 'shutdown_during_dispatch' : 'dispatch_failed_or_uncertain';
@@ -105,17 +117,22 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
   }
 
   async function assessBatch(rows) {
-    const events = rows.map(row => store.get(row.event_id));
-    const ids = events.map(e => e.id);
+    const originals = rows.map(row => store.get(row.event_id));
+    if(batching)batching.seal(rows[0].event_id,onBatch);
+    const projection=batching?.project(originals);
+    const events = projection?.events??originals;
+    const batch=batching?{...batching.describe(rows[0].event_id),truncated:projection.truncated,omittedEventCount:originals.length-events.length}:undefined;
+    const ids = originals.map(e => e.id);
     for (const id of ids) db.prepare("UPDATE core_router SET state = 'assessing', attempts = attempts + 1, updated_at = ? WHERE event_id = ?").run(Date.now(), id);
     try {
       const route=hierarchy?platformRoute(events[0]):undefined;
       const moodEvidence=mood?.prepare(events);
-      const result = await boundedCall('assessment', ids, signal => assess({ events, context: freshContext(events[0].channel, signal), signal,...route?{route,domain:route.domain}:{},...moodEvidence?{moodEvidence}:{} }));
+      const result = await boundedCall('assessment', ids, signal => assess({ events,...batch?{batch}:{}, context: freshContext(events[0].channel, signal), signal,...route?{route,domain:route.domain}:{},...moodEvidence?{moodEvidence}:{} }));
       if (!result || !Array.isArray(result.actions)) throw new Error('Invalid assessor response');
       const byId = new Map();
       for (const action of result.actions.slice(0, maxBatch * 4)) {
-        if (!action || !ids.includes(action.eventId) || byId.has(action.eventId) || !['observe', 'respond', 'task','attach','stop'].includes(action.kind)) continue;
+        if (batching&&action?.kind!=='observe'&&[...byId.values()].some(a=>a.kind!=='observe')) continue;
+        if (!action || !events.some(e=>e.id===action.eventId) || byId.has(action.eventId) || !['observe', 'respond', 'task','attach','stop'].includes(action.kind)) continue;
         byId.set(action.eventId, {
           eventId: action.eventId, kind: action.kind,...(['attach','stop'].includes(action.kind)&&typeof action.ticketId==='string'?{ticketId:action.ticketId.slice(0,512)}:{}),
           ...(typeof action.prompt === 'string' ? { prompt: redact(action.prompt).slice(0, 12000) } : {}),
@@ -125,7 +142,7 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
       // All decision rows are committed together before any dispatch starts.
       db.exec('BEGIN IMMEDIATE');
       try {
-        for (const event of events) {
+        for (const event of originals) {
           const action = byId.get(event.id) ?? { eventId: event.id, kind: 'observe' };
           db.prepare('UPDATE core_router SET state = ?, action = ?, updated_at = ?, error_code = NULL WHERE event_id = ?')
             .run(action.kind === 'observe' ? 'observed' : 'decided', JSON.stringify(action), Date.now(), event.id);
@@ -150,6 +167,7 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
     running = true;
     try {
       discover();
+      admitPending();
       while (!closed) {
         // Passive/internal evidence must not consume semantic attention just to
         // be discarded later by the per-event policy. Also cover recovered rows.
@@ -194,7 +212,7 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
         if (decided) { await deliver(decided); continue; }
         const first = hierarchy?db.prepare("SELECT r.*,e.channel,d.session_key FROM core_router r JOIN core_events e ON e.id=r.event_id JOIN core_router_domains d ON d.event_id=r.event_id WHERE r.state='pending' AND r.next_at<=? AND d.domain=? AND d.platform=? ORDER BY r.seq LIMIT 1").get(Date.now(),selected,selectedPlatform):db.prepare("SELECT r.*, e.channel FROM core_router r JOIN core_events e ON e.id = r.event_id WHERE r.state = 'pending' AND r.next_at <= ? ORDER BY r.seq LIMIT 1").get(Date.now());
         if (!first) break;
-        const rows = hierarchy?db.prepare("SELECT r.* FROM core_router r JOIN core_router_domains d ON d.event_id=r.event_id WHERE r.state='pending' AND r.next_at<=? AND d.session_key=? AND d.domain=? AND d.platform=? ORDER BY r.seq LIMIT ?").all(Date.now(),first.session_key,selected,selectedPlatform,selected==='surf'?1:maxBatch):db.prepare("SELECT r.* FROM core_router r JOIN core_events e ON e.id = r.event_id WHERE r.state = 'pending' AND r.next_at <= ? AND e.channel = ? ORDER BY r.seq LIMIT ?").all(Date.now(), first.channel, maxBatch);
+        const rows = batching?batching.rows(first.event_id):hierarchy?db.prepare("SELECT r.* FROM core_router r JOIN core_router_domains d ON d.event_id=r.event_id WHERE r.state='pending' AND r.next_at<=? AND d.session_key=? AND d.domain=? AND d.platform=? ORDER BY r.seq LIMIT ?").all(Date.now(),first.session_key,selected,selectedPlatform,selected==='surf'?1:maxBatch):db.prepare("SELECT r.* FROM core_router r JOIN core_events e ON e.id = r.event_id WHERE r.state = 'pending' AND r.next_at <= ? AND e.channel = ? ORDER BY r.seq LIMIT ?").all(Date.now(), first.channel, maxBatch);
         const actionable = [];
         for (const row of rows) {
           const event = store.get(row.event_id);
@@ -223,17 +241,19 @@ export function createRouter({ store, assess, dispatch, policy = {}, timeoutMs =
   }
 
   discover();
+  admitPending();
   schedule();
   return {
-    async ingest(event) {
+    async ingest(event, options={}) {
       if (closed) throw new Error('Router is closed');
       const persisted = store.append(event);
       db.prepare('INSERT OR IGNORE INTO core_router(event_id,seq,updated_at) VALUES(?,?,?)').run(persisted.id, persisted.seq, Date.now());
       if(hierarchy){const r=platformRoute(persisted);db.prepare('INSERT OR IGNORE INTO core_router_domains VALUES(?,?,?,?)').run(persisted.id,r.domain,r.platform,r.sessionKey);}
+      if(batching&&db.prepare("SELECT state FROM core_router WHERE event_id=?").get(persisted.id)?.state==='pending')admitEvent(persisted,options);
       schedule();
       return persisted;
     },
-    tick() { if (!closed) { discover(); schedule(); } return status(); },
+    tick() { if (!closed) { discover(); admitPending(); schedule(); } return status(); },
     status,
     async close() {
       if (closed) { await pumpPromise; return; }
