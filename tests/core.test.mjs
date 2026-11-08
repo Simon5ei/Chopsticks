@@ -55,7 +55,7 @@ test('credential metadata and recognizable credential text never enter persisted
   store.append(event('credentials', 'g:1', { text: 'Authorization: Bearer example-secret-value\napi_key=abcdefghi', meta: { token: 'secret-token', nested: { password: 'secret-password' }, messageId: 'ok' } }));
   const encoded = JSON.stringify(store.get('credentials'));
   assert.doesNotMatch(encoded, /example-secret-value|abcdefghi|secret-token|secret-password/);
-  assert.match(store.context({ channel: 'g:1' }).text, /source data/i);
+  assert.match(store.context({ channel: 'g:1' }).text, /带来源/);
 });
 
 test('router persists promptly, dispatches once and resumes without duplicate dispatch after restart', async t => {
@@ -240,4 +240,25 @@ test('Bili confirmed publishing is prioritized across public scopes without self
   await until(() => router.status().counts.observed === 207);
   assert.ok(assessed.includes('bili-observation'));
   assert.ok(!assessed.includes('bili-confirmed'));
+});
+
+test('Bili DMs keep received and confirmed sent events within the exact platform and peer', t => {
+  const f = fixture(t);
+  for (const [id, channel] of [['dm-one', 'bili:dm:7'], ['dm-two', 'bili:dm:8'], ['qq-private', 'p:7'], ['group', 'g:1'], ['public-bili', 'bili:public']]) {
+    f.store.append(event(id, channel));
+    f.store.append(event(id + '-sent', channel, {kind:'message.sent', meta:{messageId:id + '-receipt'}}));
+  }
+  f.restart();
+  for (const [channel, expected] of [
+    ['bili:dm:7', ['dm-one', 'dm-one-sent']], ['bili:dm:8', ['dm-two', 'dm-two-sent']],
+    ['p:7', ['qq-private', 'qq-private-sent']],
+    ['g:2', ['group', 'group-sent', 'public-bili', 'public-bili-sent']],
+    ['bili:public', ['group', 'group-sent', 'public-bili', 'public-bili-sent']],
+  ]) {
+    assert.deepEqual(f.store.recent({channel}).map(e => e.id), expected, channel);
+    assert.deepEqual(f.store.context({channel}).events.map(e => e.id), expected, channel);
+  }
+  for (const channel of ['bili:dm:', 'bili:dm:abc', 'bili:dm:7:8', 'bili:private']) {
+    assert.throws(() => f.store.append(event('invalid-' + channel, channel)), /channel/);
+  }
 });

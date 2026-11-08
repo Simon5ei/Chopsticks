@@ -31,3 +31,11 @@ test('read watermark cannot acknowledge beyond actually returned snapshot',()=>{
  assert.equal(state.read('g:1',{unread:true}).events.length,1);
  store.close();fs.rmSync(dir,{recursive:true,force:true});
 });
+
+test('proven preflight refusal is recorded not_sent with safe diagnostics and never auto replayed',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'send-boundary-')),store=createEventStore({stateDir:dir}),state=createHostState(store);t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});});
+ let attempts=0;const input={text:'pong'};const perform=async()=>{attempts++;throw Object.assign(Error('private cookie must not persist'),{deliveryState:'not_sent',code:'BILI_API',apiCode:-101,endpoint:'/x/web-interface/nav'});};
+ await assert.rejects(state.send('preflight',input,perform));
+ const row=store.db.prepare('SELECT state,value FROM host_sends WHERE id=?').get('preflight');assert.equal(row.state,'not_sent');assert.deepEqual(JSON.parse(row.value),{deliveryState:'not_sent',code:'BILI_API',apiCode:-101,endpoint:'/x/web-interface/nav'});
+ await assert.rejects(createHostState(store).send('preflight',input,perform),/not sent|not_sent/i);assert.equal(attempts,1);
+});

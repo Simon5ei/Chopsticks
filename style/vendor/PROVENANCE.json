@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/Nozzi2455/fishtalk",
+  "version": "0.3.6",
+  "commit": "bb621c3da31052e7e52b6307db3e27c508e4d502",
+  "upstreamPath": "lib/fishrules.js",
+  "vendoredPath": "style/vendor/fishrules.cjs",
+  "sourceSHA256": "0aac16f2f278eef95920aa11e1e8d803f589ad5fc6da07617cbcf426914d07a0",
+  "vendoredSHA256": "0aac16f2f278eef95920aa11e1e8d803f589ad5fc6da07617cbcf426914d07a0",
+  "transform": "CommonJS extension renamed to .cjs; rule content unchanged",
+  "license": "MIT",
+  "licensePath": "notices/fishtalk-MIT-LICENSE"
+}

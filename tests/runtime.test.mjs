@@ -1,3 +1,4 @@
+import {liveConversationContext} from '../host/conversation-summary.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +10,7 @@ import { createRuntime } from '../host/runtime.mjs';
 const incoming = (id, channel, meta = {}) => ({ id, kind: 'message.received', channel, actorId: '10001', text: id, meta: { addressed: true, messageId: id, ...meta } });
 async function until(condition) { for (let n = 0; n < 400; n++) { if (condition()) return; await delay(5); } assert.fail('Runtime condition timed out'); }
 
-async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000, ownerId,hangModel=false } = {}) {
+async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePrompt, timeoutMs = 1000, ownerId,hangModel=false,reminders=false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chopsticks-runtime-'));
   const fishHome = path.join(dir, 'fish'), stateDir = path.join(dir, 'state');
   fs.mkdirSync(path.join(fishHome, 'characters', 'fish'), { recursive: true });
@@ -41,11 +42,22 @@ async function fixture(t, { autoDecide = true, decideKind = 'respond', decidePro
       },
     };
   };
-  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false, ownerId }, bili: { enabled: false }, routerTimeoutMs: timeoutMs,...(hangModel?{model:{provider:'fixture',model:'fixture'}}:{}) }, controller, adapterFactory,...(hangModel?{createRouterSession:async()=>{}}:{}),archiveRouterSession:async id=>archived.push(id),releaseRouterSession:async id=>released.push(id) });
+  runtime = await createRuntime({ config: { stateDir, fishHome, qq: { enabled: false, ownerId,allowUsers:['10001'],allowGroups:['1','2'] },reminders:{enabled:reminders}, bili: { enabled: false }, routerTimeoutMs: timeoutMs,...(hangModel?{model:{provider:'fixture',model:'fixture'}}:{}) }, controller, adapterFactory,...(hangModel?{createRouterSession:async()=>{}}:{}),archiveRouterSession:async id=>archived.push(id),releaseRouterSession:async id=>released.push(id) });
   await runtime.start();
   t.after(async () => { await runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { runtime, assessments, deliveries, sends, cancels, adapterOptions,archived,released };
 }
+
+test('enabled reminders dispatch a durable source-scoped timer through Router without sending directly',async t=>{
+ const f=await fixture(t,{reminders:true});assert.ok(f.runtime.reminders);
+ await f.runtime.ingest(incoming('remind-source','p:10001'));await until(()=>f.deliveries.length===1);
+ const delivery=f.deliveries[0];f.runtime.event({id:delivery.sessionId},{type:'user/message',data:{message:{source:{rpcId:delivery.requestId}}}});
+ const at=Date.now()+30,one=f.runtime.reminders.schedule(f.runtime.caller(delivery.sessionId),{at:new Date(at).toISOString(),text:'继续读书'},'reminder-call');
+ await until(()=>Date.now()>=at);await f.runtime.reminders.tick();await until(()=>f.deliveries.length===2);
+ assert.equal(f.assessments[1].events[0].id,'reminder:'+one.id);assert.equal(f.assessments[1].events[0].kind,'timer');assert.equal(f.assessments[1].events[0].channel,'p:10001');assert.match(f.deliveries[1].text,/继续读书/);assert.equal(f.sends.length,0);
+});
+
+test('reminder service is absent when configuration is disabled',async t=>{const f=await fixture(t);assert.equal(f.runtime.reminders,undefined);});
 
 test('completed router evaluations archive and release; console keeps one logical coordinator and durable trace access',async t=>{
  const f=await fixture(t);
@@ -69,7 +81,7 @@ test('runtime refreshes a group dispatch with self facts confirmed while assessm
   await f.runtime.ingest({ id: 'confirmed-in-A', kind: 'message.sent', channel: 'g:1', actorId: '90001', text: 'I already promised Tuesday in A', meta: { messageId: '111' } });
   f.runtime.decide(f.assessments[0].sessionId, JSON.stringify([{ eventId: 'question-in-B', kind: 'respond' }]));
   await until(() => f.deliveries.length === 1);
-  assert.match(f.deliveries[0].text, /promised Tuesday in A/);
+  assert.match(liveConversationContext(f.runtime,'g:2').text,/promised Tuesday in A/);
   assert.equal(f.runtime.caller(f.deliveries[0].sessionId).channel, 'g:2');
   assert.equal(f.runtime.caller(f.deliveries[0].sessionId).admin, false);
   assert.equal(f.sends.length, 0, 'model dispatch alone must never send QQ text');

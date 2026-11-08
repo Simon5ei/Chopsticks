@@ -22,4 +22,12 @@ Writes are serialized within one service instance. API code 0, successful HTTP s
 
 No autonomous scheduler is copied: the old scheduler depends on the discarded plugin host. The host schedules this callable cycle under an explicit standing rule, stores observations, and asks its model to decide whether to inspect/respond. A timer event alone is not write authorization. Since proposals do not write feed-picks, the host should deduplicate candidate events or update its own canonical event journal.
 
+## Social inbox and private replies
+
+`adapters/bili-social.mjs` polls reply/mention notifications and bounded private-message history under the existing external `bili.config.json.listen` settings. It keeps exact platform IDs, verifies comment floors, skips persisted notification keys, and reports partial scans. The host seeds the first listener baseline without replaying old conversations, then persists each new received event before marking it seen. No platform read acknowledgement is sent by polling.
+
+`chopsticks_bili_reply` replies to the current consumed public comment event; the model supplies text only. Video and dynamic comment targets are separately verified, including dynamic comment types 11/17. `chopsticks_bili_dm_reply` is restricted to a dedicated `bili:dm:<mid>` session and the current received peer. Private events and memories are excluded from groups, public Bili and other private conversations. The adapter rechecks the latest inbound message before a single POST; a stable server `msg_key` is required for confirmation. Uncertain sends are not retried. Daily private replies are bounded at 30 total, with at most three to each non-owner peer.
+
+Feed scheduling uses Asia/Shanghai for both date and window time. Empty feed results do not consume an opportunity. Health includes the feed waiting/error reason, daily consumption and social-inbox partial/error state, rather than treating service readiness as proof of successful Bili activity. All publishing remains disabled in isolated validation unless its transport is explicitly replaced in the private validation copy.
+
 Verification uses temporary fish fixtures, simulated Bili HTTP responses, real subprocess execution, and a real MCP SDK stdio client. It does not read live fish data or post to Bilibili.

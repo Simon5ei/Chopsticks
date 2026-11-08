@@ -71,3 +71,21 @@ test('memory evidence redacts credential-shaped source identifiers and text',t=>
  const result=JSON.stringify(f.memory.search({query:'rice',channel:'g:2'}));
  assert.ok(!result.includes('secret-value'));assert.ok(!result.includes('another-value'));
 });
+
+test('Bili DM memory retains private Bili provenance and never crosses peers or platforms',t=>{
+ const f=setup(t,[
+  {id:'role-dm',conversationKey:'bili:dm:7',scope:'bili',platform:'bili',kind:'dm',private:true,text:'rice relationship'},
+  {id:'qq-private',conversationKey:'p:7',scope:'qq',text:'rice qq'},
+  {id:'group',conversationKey:'g:1',scope:'qq',text:'rice group'}
+ ]);
+ const one=f.memory.remember({channel:'bili:dm:7',id:'one',text:'rice private Bili'});
+ const two=f.memory.remember({channel:'bili:dm:8',id:'two',text:'rice another peer'});
+ assert.equal(one.platform,'bili');assert.equal(one.scope,'bili');assert.equal(one.private,true);
+ assert.equal(two.private,true);
+ assert.deepEqual(f.memory.search({channel:'bili:dm:7',query:'rice'}).records.map(r=>r.id),['role-dm','one']);
+ assert.deepEqual(f.memory.search({channel:'bili:dm:8',query:'rice'}).records.map(r=>r.id),['two']);
+ assert.deepEqual(f.memory.search({channel:'p:7',query:'rice'}).records.map(r=>r.id),['qq-private']);
+ for(const channel of ['g:1','g:2','bili:public'])assert.deepEqual(f.memory.search({channel,query:'rice'}).records.map(r=>r.id),['group'],channel);
+ assert.equal(f.memory.remember({channel:'bili:dm:7',id:'one',text:'rice private Bili'}).createdAt,one.createdAt);
+ assert.throws(()=>f.memory.remember({channel:'bili:dm:7',id:'one',text:'changed'}),/conflict/);
+});

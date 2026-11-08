@@ -27,11 +27,13 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     if (!match || !(match[1] === 'g' ? groups : users).has(match[2])) throw problem('NOT_ALLOWED', 'QQ target is not allowlisted');
     return { kind: match[1], id: match[2] };
   }
-  async function request(action, data = {}, sending = false) {
+  async function request(action, data = {}, sending = false, signal) {
     let res, body;
     try {
+      const timeout=AbortSignal.timeout(15000);
+      signal?.throwIfAborted();
       res = await fetchImpl(`${base.href.replace(/\/$/, '')}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json',
-        ...(httpToken ? { authorization: `Bearer ${httpToken}` } : {}) }, body: JSON.stringify(data), signal: AbortSignal.timeout(15000) });
+        ...(httpToken ? { authorization: `Bearer ${httpToken}` } : {}) }, body: JSON.stringify(data), signal: signal?AbortSignal.any([signal,timeout]):timeout });
       body = await res.json();
     } catch {
       throw problem(sending ? 'SEND_UNCERTAIN' : 'GATEWAY_UNAVAILABLE', sending ? 'QQ send acknowledgement unavailable; do not retry blindly' : 'QQ gateway request failed');
@@ -193,10 +195,12 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     entry.promise = promise;
     sends.set(key, entry); sendChain = promise.catch(() => {}); return promise;
   }
-  async function downloadImage(url) {
+  async function downloadImage(url, signal) {
+    signal?.throwIfAborted();
     let current = officialImageUrl(url);
     for (let hops = 0; hops < 4; hops++) {
-      const response = await fetchImpl(current, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+      const timeout=AbortSignal.timeout(15000);
+      const response = await fetchImpl(current, { redirect: 'manual', signal: signal?AbortSignal.any([signal,timeout]):timeout });
       if ([301, 302, 303, 307, 308].includes(response.status)) { current = officialImageUrl(new URL(response.headers.get('location'), current).href); await response.body?.cancel?.(); continue; }
       if (!response.ok) throw new Error('QQ image download failed');
       const mimeType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
@@ -214,18 +218,35 @@ export function createQQAdapter({ httpUrl, wsUrl, token = '', ownerId, selfId, a
     }
     throw new Error('Too many QQ image redirects');
   }
-  async function getImage({ channel, messageId }) {
+  async function getImage({ channel, messageId, maxImages=4, signal }) {
+    signal?.throwIfAborted();
+    if(!Number.isInteger(maxImages)||maxImages<1||maxImages>4)throw new Error('Invalid image limit');
     const event = observed(channel, messageId), media = imageSegments(event.meta.segments);
     if (!media.length) throw new Error('Received message has no supported image');
     const content = [];
-    for (const segment of media.slice(0, 4)) {
-      let url = segment.data.url;
-      if (!url) {
-        const file = String(segment.data.file || '');
-        if (!file || file.length > 255 || /[\\/:]/.test(file)) throw new Error('Image has no supported gateway reference');
-        const data = await request('get_image', { file }); url = data?.url;
+    for (const segment of media.slice(0, maxImages)) {
+      signal?.throwIfAborted();
+      const file = String(segment.data.file || '');
+      const refreshable = Boolean(file) && file.length <= 255 && !/[\\/:]/.test(file);
+      const freshUrl = async () => {
+        if (!refreshable) throw new Error('Image has no supported gateway reference');
+        const data = await request('get_image', { file }, false, signal);
+        if (!data?.url) throw new Error('QQ gateway returned no image URL');
+        return data.url;
+      };
+      const storedUrl = segment.data.url;
+      const url = storedUrl || await freshUrl();
+      try {
+        content.push(await downloadImage(url,signal));
+      } catch (error) {
+        // QQ image URLs carry a short-lived rkey. A reply to an older message
+        // can still be valid while the stored URL has expired; ask the gateway
+        // for a fresh URL using the stable file reference and retry once.
+        if (signal?.aborted || !storedUrl || !refreshable) throw error;
+        const refreshed = await freshUrl();
+        if (refreshed === url) throw error;
+        content.push(await downloadImage(refreshed,signal));
       }
-      content.push(await downloadImage(url));
     }
     return { content };
   }

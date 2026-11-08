@@ -7,7 +7,7 @@ import { canRetry } from './stage.mjs';
 const sameChannel = (a, b)=>JSON.stringify(a) === JSON.stringify(b);
 export const automatic = (input)=>input?.kind === 'note' || input?.kind === 'trigger' && !input.human;
 const readBefore = (input, until)=>input.readAt === undefined ? (input.deliveredAt && input.deliveredAt > input.at ? input.deliveredAt : input.at) <= until : !!input.readAt && input.readAt < until;
-const STATUS_REQUEST = 'Report the current ticket status with orchestrator_report. This is a status-only request: do not resume implementation or perform external actions.';
+const STATUS_REQUEST = '仅报告当前任务状态，调用 chopsticks_task_report，使用本轮 ticketId 和 deliveryId。';
 export class Tickets extends EnginePart {
     replies;
     constructor(options, replies){

@@ -1,0 +1,51 @@
+{
+  "package": "coser-image-search",
+  "version": "1.0.0",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 小鲸鱼",
+  "sourceFile": "src/fish-find-chicken.js",
+  "sourceSha256": "440a4ecc12e0bd251f63994a038ec36af3d51cd6b40904adaa644bea1501c3a6",
+  "licenseFile": "../notices/image-source-MIT-LICENSE",
+  "extractions": [
+    {
+      "target": "parsers.mjs",
+      "functions": ["parseSaucenao", "parseIqdb", "parseTracemoe"],
+      "helpers": ["minimal HTML text cleaning", "artwork URL validation"],
+      "modifications": [
+        "Restrict output to canonical HTTPS artwork and anime URLs; omit author, account, preview-video and image-CDN fields.",
+        "Parse IQDB confidence within each result table and reject missing, negative, ambiguous or out-of-range scores.",
+        "Require finite trusted confidence: at least 0.87 for trace.moe and 0.60 for SauceNAO/IQDB.",
+        "Validate response envelopes and no-match formats and bound titles to 160 characters."
+      ]
+    },
+    {
+      "target": "lens.mjs",
+      "functions": ["googleLensSearch", "LENS_EXTRACT", "resolveLensGoto"],
+      "helpers": ["singleton CDP browser lifecycle", "in-page Lens upload form", "result-card extraction and /goto resolution"],
+      "modifications": [
+        "Run a local headless Chrome/Chromium as a singleton with an explicit profile, optional proxy, secure DNS and idle shutdown instead of a Windows-only Edge path.",
+        "Accept only the fixed Google start/upload pages; no caller-supplied URL, proxy or executable reaches the upload flow.",
+        "Return bounded HTTPS Lens candidates; account extraction and reply formatting are delegated to the unchanged upstream functions in accounts.mjs.",
+        "Map captcha, unreachable Google, missing browser and deadline failures to stable codes without echoing upstream text.",
+        "Bound the whole search, each CDP call and the number of resolved result cards."
+      ]
+    },
+    {
+      "target": "accounts.mjs",
+      "functions": ["extractAccounts", "dominantPersonName", "dropWeakArtwork", "formatReply", "accountNameOf", "socialNameFromTitle", "profileTitleName", "authorNameFromTitle", "nameFromTitleMention", "looksLikePersonName", "normalizePersonName", "engineLabels"],
+      "helpers": ["PLATFORM_RULES", "PATH_DENY", "PLATFORM_WEIGHT", "ARTWORK_PLATFORMS"],
+      "modifications": [
+        "Ported verbatim from the upstream file; only module imports and exports were adapted.",
+        "No new platforms, name rules or reply layout were added: Twitter/Weibo/Bilibili/Instagram/Pixiv URL rules, reserved-path filtering, strict dominant-name consensus and the original reply text are unchanged.",
+        "No face recognition and no handle guessing; accounts exist only when a result URL backs them."
+      ]
+    }
+  ],
+  "newCode": [
+    {
+      "target": "client.mjs",
+      "description": "Independent fixed-endpoint multipart client with image signature validation, bounded streaming responses, upload redirect refusal, cancellation, per-engine deadlines and isolated failures. Lens is a fourth isolated engine with its own deadline."
+    }
+  ],
+  "excluded": ["face recognition", "handle guessing from names", "additional photo/cosplay engines", "the upstream monolithic runtime"]
+}

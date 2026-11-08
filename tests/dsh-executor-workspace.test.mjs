@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createDshExecutor} from '../tasks/dsh-executor.mjs';
+
+test('new workers share a fixed workspace cwd and register its native workspace before create',async t=>{
+ const workerRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fixed-worker-root-'));t.after(()=>fs.rmSync(workerRoot,{recursive:true,force:true}));
+ const created=[],prepared=[];
+ const executor=createDshExecutor({workerRoot,prepareWorkspace:async input=>{assert.ok(fs.statSync(input.cwd).isDirectory());prepared.push(input);return 'workspace-worker';},controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(r){assert.equal(prepared.length,created.length+1);created.push(r);return {sessionId:r.sessionId};}}});
+ await executor.ensureSession({sessionId:'worker-one'});await executor.ensureSession({sessionId:'worker-two'});
+ assert.deepEqual(prepared,[{cwd:workerRoot,title:'后台任务'},{cwd:workerRoot,title:'后台任务'}]);
+ assert.ok(created.every(r=>r.workspaceId==='workspace-worker'&&!('cwd' in r)));assert.deepEqual(fs.readdirSync(workerRoot),[]);
+});
+
+test('new workers without workspace registration still use the fixed root as cwd',async t=>{
+ const workerRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fixed-worker-root-'));t.after(()=>fs.rmSync(workerRoot,{recursive:true,force:true}));let request;
+ const executor=createDshExecutor({workerRoot,controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(r){request=r;return {sessionId:r.sessionId};}}});
+ await executor.ensureSession({sessionId:'worker-one'});assert.equal(request.cwd,workerRoot);
+});
+
+test('restored workers preserve old native cwd and do not register a replacement workspace',async()=>{
+ const selected=[];const executor=createDshExecutor({workerRoot:'/unused/new',model:{provider:'fixture',model:'fixture'},prepareWorkspace:async()=>assert.fail('must not relocate history'),controller:{async inspect(){return {meta:{cwd:'/old/session/root'}};},async create(){assert.fail('must not recreate');},async selectModel(r){selected.push(r);}}});
+ await executor.ensureSession({sessionId:'old-worker'});assert.equal(selected.length,1);
+});
+
+test('cancellation while preparing the workspace prevents native session creation',async t=>{
+ const workerRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fixed-worker-root-'));t.after(()=>fs.rmSync(workerRoot,{recursive:true,force:true}));const control=new AbortController();
+ const executor=createDshExecutor({workerRoot,prepareWorkspace:async()=>{control.abort();return 'workspace';},controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(){assert.fail('cancelled launch');}}});
+ await assert.rejects(()=>executor.ensureSession({sessionId:'worker',signal:control.signal}),e=>e.name==='AbortError');
+});
+
+test('native resume result errors prohibit prompt admission',async()=>{
+ const failure=Object.assign(Error('missing'),{code:'session/not-found'});
+ const executor=createDshExecutor({controller:{async resolveAgent(){return {error:failure};},async prompt(){assert.fail('missing native agent');}}});
+ await assert.rejects(()=>executor.prompt({sessionId:'worker',text:'fixture',deliveryId:'prompt:fixture'}),e=>e===failure);
+});

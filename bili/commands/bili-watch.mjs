@@ -125,9 +125,7 @@ try {
 }
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(`（原片留着: ${mp4}；换参数重抽不必重新下载。加 --uniform 可强制等间隔）`)
-console.log('（提示：这条视频若有官方字幕，先跑 `node bili.mjs subtitles <BV>` 更省也更准——' +
-  '抽帧是给"字幕没官方轨、或要看画面/界面"的情况用的）')
-
+console.log('需要台词时可调用 bili_subtitles。')
 // 观看历史：直接调 watch-video 时记一笔；被 debrief 调用时由 debrief 统一记账，避免重复。
 if (!process.env.CHOPSTICKS_WATCH_PARENT && !process.argv.includes('--no-history')) {
   const rec = appendWatch({

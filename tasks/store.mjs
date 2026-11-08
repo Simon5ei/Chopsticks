@@ -1,10 +1,50 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+const bootPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const ticksPattern = /^(?:0|[1-9][0-9]{0,19})$/;
+function readProc(file) {
+  const fd = openSync(file, 'r'), buffer = Buffer.alloc(4097);
+  try {
+    let size = 0;
+    while (size < buffer.length) { const count = readSync(fd, buffer, size, buffer.length - size, null); if (!count) break; size += count; }
+    if (size > 4096) throw new Error('Process identity exceeds bound');
+    return buffer.subarray(0, size).toString('utf8');
+  } finally { closeSync(fd); }
+}
+function startTicks(pid, readFile) {
+  const raw = readFile(`/proc/${pid}/stat`);
+  if (typeof raw !== 'string' || raw.length > 4096) throw new Error('Invalid process identity');
+  // comm is parenthesized and may itself contain spaces or closing parentheses.
+  const open = raw.indexOf('('), close = raw.lastIndexOf(')'), fields = raw.slice(close + 1).trim().split(/\s+/);
+  if (open < 1 || close <= open || raw.slice(0, open).trim() !== String(pid) || !/^[A-Za-z]$/.test(fields[0]) || !ticksPattern.test(fields[19] ?? '')) throw new Error('Invalid process identity');
+  return fields[19]; // /proc stat field 22, counted from field 3 after comm.
+}
+function identity(readFile) {
+  try {
+    const raw = readFile('/proc/sys/kernel/random/boot_id');
+    if (typeof raw !== 'string' || raw.length > 4096 || !bootPattern.test(raw.trim())) throw new Error();
+    return { bootId: raw.trim(), startTicks: startTicks(process.pid, readFile) };
+  } catch { throw new Error('Coordinator process identity unavailable'); }
+}
+function activeOwner(owner, current, kill, readFile) {
+  if (!owner || typeof owner !== 'object' || Array.isArray(owner) || !Object.hasOwn(owner, 'pid') || typeof owner.leaseId !== 'string' || !owner.leaseId.trim()) return true;
+  const hasIdentity = Object.hasOwn(owner, 'bootId') || Object.hasOwn(owner, 'startTicks');
+  const identified = typeof owner.bootId === 'string' && bootPattern.test(owner.bootId) && typeof owner.startTicks === 'string' && ticksPattern.test(owner.startTicks);
+  if (hasIdentity ? !identified || Object.keys(owner).length !== 4 : Object.keys(owner).length !== 2) return true;
+  if (owner.pid === null) return hasIdentity; // Only the explicit released marker is free.
+  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return true;
+  if (current && identified && owner.bootId !== current.bootId) return false;
+  try { kill(owner.pid, 0); } catch (error) { return error.code !== 'ESRCH'; }
+  // Legacy or non-Linux leases retain the conservative PID-only rule.
+  if (!current || !identified) return true;
+  try { return startTicks(owner.pid, readFile) === owner.startTicks; } catch { return true; }
+}
+
 /** Synchronous repositories and effect journal share the Engine transaction. */
-export function createStore(stateDir) {
+export function createStore(stateDir, { platform = process.platform, readFile = readProc, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
   mkdirSync(stateDir, { recursive: true });
   const db = new DatabaseSync(join(stateDir, 'superagent.sqlite'));
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -25,18 +65,15 @@ export function createStore(stateDir) {
     catch (error) { db.exec('ROLLBACK'); throw error; }
     finally { depth--; }
   }
-  // One local host owns the journal. A live PID (including this process) is
-  // conservatively treated as an owner; a crashed process releases it on restart.
+  // One local host owns the journal. Linux PID reuse is distinguished by boot
+  // and process generation; unknown identities never authorize takeover.
   const leaseId = randomUUID();
   try {
     atomic(() => {
       const owner = get('lease', 'coordinator');
-      if (owner?.pid) {
-        let alive = true;
-        try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') alive = false; }
-        if (alive) throw new Error('Coordinator already open: effect journal has an active owner');
-      }
-      put('lease', 'coordinator', { pid: process.pid, leaseId });
+      const current = platform === 'linux' ? identity(readFile) : null;
+      if (owner !== undefined && activeOwner(owner, current, kill, readFile)) throw new Error('Coordinator already open: effect journal has an active owner');
+      put('lease', 'coordinator', { pid: process.pid, leaseId, ...current });
     });
   } catch (error) { db.close(); throw error; }
   const repository = (kind, key = 'id') => ({ get: id => get(kind, id), save: value => put(kind, value[key], value), list: () => list(kind) });

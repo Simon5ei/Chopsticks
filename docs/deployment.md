@@ -73,3 +73,51 @@ Each Router evaluation still uses an independent context. On completion, a persi
 Linux passed 148/148 tests. Independent review findings were fixed and re-reviewed. Isolated native DSH with DeepSeek verified cross-group recall, private exclusion, task completion, archive persistence and zero live Router agents after completion. Browser checks found one coordinator entry, accessible historical traces, and no page errors. No synthetic production QQ/Bili messages were sent.
 
 Deployment backup: `/opt/chopsticks-backups/router-lifecycle-20261103-110905` (code, config, state and native workspace archive registry). Stop the LAN socket/proxy before stopping DSH during maintenance: the proxy's dependency can otherwise reactivate DSH. Production archived all 39 legacy Router sessions; QQ reception remained healthy, and QQ mapping, persona and role-card checksums matched. Native transcripts were retained. Rollback code by stopping the LAN socket/proxy and DSH, restoring `code.tgz` into `/opt/chopsticks`, and restarting DSH and the LAN socket. The native archive registry backup can separately restore sidebar visibility if needed; do not overwrite later workspace changes blindly.
+
+## Anime and illustration source lookup — 2026-11-03
+
+Runtime revision `8e99a64eaa9f5d58435f4e3c1cebaa2852d743d6` adds QQ-only `chopsticks_anime_source`. A user must explicitly request source lookup for the current received image or its explicit same-channel reply target. It uploads one supported image of at most 8 MiB to fixed SauceNAO illustration/anime indexes, trace.moe or 2D IQDB. Only artwork/anime candidates are returned; Lens, browsers, identity/account inference and the original OneBot sender are excluded. Normal `chopsticks_send` handles final confirmed delivery. No new package, process, GPU or listening port is required.
+
+Linux passed 177/177. Windows feature tests passed 175 with two Linux-only skips. Isolated native DSH with real DeepSeek verified all five permission scopes, a tool result and one confirmed fake QQ reply. A public trace.moe documentation screenshot matched the expected anime at approximately 0.992 similarity; SauceNAO returned a valid response with no retained match, while IQDB timed out. Engine failures remain explicit and independent. No private images or synthetic production messages were used.
+
+Backup: `/opt/chopsticks-backups/anime-source-20261103-193855`, including code, profile, unchanged config, state and nine original session archives. Production source hashes, healthy QQ reception, stable process, model/config, historical prefixes, mappings and persona were verified. Rollback restores code and the recorded profile, recomposes web, and restarts DSH after stopping the LAN socket/proxy; keep current databases and native histories and never replay uncertain sends.
+
+## Google Lens engine — 2026-11-04
+
+`/鱼鱼找鸡` now runs Lens as a fourth, isolated engine alongside SauceNAO, trace.moe and IQDB. `image-source/lens.mjs` starts a singleton headless Chrome/Chromium over CDP, posts the selected image to the fixed `lens.google.com/v3/upload` page, resolves Google `/goto` result cards and returns bounded HTTPS candidates. Account extraction and the reply are a direct port of the source tool: `image-source/accounts.mjs` keeps the original `extractAccounts`, `dominantPersonName`, `socialNameFromTitle`, `profileTitleName`, `accountNameOf` and `formatReply`, so it uses the upstream URL-backed Twitter/Weibo/Bilibili/Instagram/Pixiv rules, strict dominant-name consensus by default, and the original `🎯 **鱼鱼找鸡结果**` layout. Unsupported social platforms and handle guessing are ignored exactly as upstream. The browser is not started until a Lens search runs; it stops after two idle minutes or when the host shuts down.
+
+The host process needs a Chromium-family binary. This deployment uses Chrome for Testing 141 at `/opt/chrome/chrome-linux64/chrome` (the directory is additive and not part of the code archive). Running as root adds `--no-sandbox`; the browser runs as the same host user. The candidate list also accepts a full Chrome/Chromium/Edge install, and `imageSource.lens.browser` can pin an explicit path.
+
+This server's system DNS returns poisoned or wrong addresses for `www.google.com` and the `gstatic` asset hosts, which leaves the Lens page stuck at "正在思考". Chrome therefore runs with secure DNS-over-HTTPS by default (`https://cloudflare-dns.com/dns-query`). Set `imageSource.lens.doh` to another DoH template, or to `""` to disable it on a network where system DNS already resolves Google correctly.
+
+Configuration (all optional; defaults are shown):
+
+```json
+"imageSource": {
+  "lens": {
+    "enabled": true,
+    "browser": "",
+    "proxy": "",
+    "doh": "https://cloudflare-dns.com/dns-query",
+    "profileDir": ""
+  }
+}
+```
+
+`profileDir` defaults to `<stateDir>/lens-profile` and persists Google's cookies. If Google returns its `/sorry` verification page, the engine reports `GOOGLE_CAPTCHA` and the reply says "谷歌要求验证"; it never treats the page as a match and does not retry blindly. Use a working `proxy` for a cleaner egress, reduce request frequency, or rely on SauceNAO/trace.moe/IQDB until verification clears. A missing browser reports `BROWSER_UNAVAILABLE`; an unreachable Google reports `GOOGLE_UNREACHABLE`.
+
+Verification on this host: the full local suite passed (201 pass, 10 skipped) and the candidate server suite passed 188/188. The real browser flow uploaded the test image, rendered the Lens results page, resolved `/goto` cards to their target hosts and applied the artwork allowlist; a later fresh-profile run returned `status: ok`. Google intermittently served the captcha page from the same egress, so the failure path was also verified with `GOOGLE_CAPTCHA` rather than a false match. No private images or synthetic QQ/Bili messages were used.
+
+Deployment backup: `/opt/chopsticks-backups/lens-20261104-000154` (code archive, private config, systemd drop-in). The production host predates the local working tree's unrelated host changes, so only the `animeCommands` Lens wiring was applied to its existing `host/runtime.mjs`; the new `image-source/lens.mjs`, updated `client.mjs` and direct-command files were deployed whole. Server suite: 188/188. After restart DSH reported ready, QQ remained connected, the Lens profile lived under `/var/lib/chopsticks/state/lens-profile`, and no headless Chrome process was left behind. The deployed browser is Chrome for Testing 141 at `/opt/chrome/chrome-linux64/chrome`; rollback restores `code.tgz` and restarts DSH, leaving the additive browser directory in place.
+
+On 2026-11-04 the administrator explicitly opened social-account candidates. The direct command and the native service now accept explicit coser/account requests; `image-source/accounts.mjs` is a direct port of the source tool's extraction and reply functions (not a new rule set): fixed platform URL rules, reserved-path filtering, post-to-profile normalization, strict dominant-name consensus and the original reply layout. Face recognition and handle guessing remain out of scope.
+
+### QQ image CDN host — 2026-11-04
+
+The first live `/鱼鱼找鸡` after the Lens rollout failed before any engine ran: `officialImageUrl` allowed only `qpic.cn`, `qq.com` and `gtimg` hosts, but current group images are served from `multimedia.nt.qq.com.cn`, so `getImage` rejected the URL. The allowlist now includes `nt.qq.com.cn` as an exact subdomain (look-alike hosts such as `multimedia.nt.qq.com.cn.evil.test` remain rejected), with a regression test. The direct command now distinguishes "image could not be fetched" from "search failed", logs only the stable stage/code, and uses a 60-second outer deadline so the client's 45-second partial-result deadline wins instead of aborting the whole reply.
+
+Verified against the failing message: the 150,477-byte JPEG downloaded successfully, and the full four-engine search finished in about 30 seconds with SauceNAO/trace.moe/Lens `ok` and no artwork match, IQDB `TIMEOUT`. No generic failure reply and no synthetic QQ/Bili messages were produced.
+
+Source-port backup: `/opt/chopsticks-backups/source-port-20261104-014102` (code, private config, systemd drop-in). Server suite: 201/201. Verified against the live coser photo: the unchanged source `extractAccounts`/`formatReply` produced the original `🎯 **鱼鱼找鸡结果**` layout with three URL-backed X accounts (`@yingshaoovo`, `@yunaponk`, `@yogana_19`) in about 10 seconds. Names use the source's own fallbacks (handle or title fragment), not a new cleanup rule. Only public account names/URLs were printed; the image itself was not logged and no QQ message was sent.
+
+Expired image URL refresh: QQ image URLs carry a short-lived rkey. The first live retry still failed with `QQ image download failed` because it replied to an older image message whose stored URL had expired, even though the message was still in the adapter's received cache. `adapters/qq.mjs` now asks the gateway for a fresh URL through `get_image(file)` when the stored URL fails and retries the download once; a same-URL response does not loop. Backup: `/opt/chopsticks-backups/expired-url-20261104-023703`. Server suite: 203/203. Verified with a deliberately expired URL against the live message: the gateway returned a fresh URL, the 150,477-byte JPEG downloaded, and the full source reply completed in about 30 seconds with three URL-backed X accounts (example run: `@yingshaoovo`, `@yunaponk`, `@Lili_amamiya22`). Lens card order varies between runs.

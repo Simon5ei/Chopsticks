@@ -106,8 +106,9 @@ if (!['1', '11', '17'].includes(type)) {
   console.error('--type 只能是 1（视频）| 11（图文/动态）| 17（转发动态）')
   process.exit(2)
 }
-// 动态评论的 referer 要指到 opus 页；给了它就可以不给 --bvid。
+// MCP host builds this canonical dynamic referer; never use it as a fetch URL.
 const refererArg = args.get('referer') ? String(args.get('referer')) : ''
+const dynamicId = type === '1' ? '' : refererArg.match(/^https:\/\/t\.bilibili\.com\/([1-9][0-9]{0,19})$/)?.[1]
 const dry = args.get('dry') === true || args.has('dry')
 const go = args.get('go') === true || args.has('go')
 
@@ -117,6 +118,12 @@ if (!oid || (!bvid && !refererArg) || !message) {
 }
 if (dry && go) { console.error('pick either --dry or --go, not both'); process.exit(2) }
 if (!dry && !go) { console.error('refusing to run without an explicit --dry or --go'); process.exit(2) }
+if (!/^[1-9][0-9]{0,19}$/.test(String(oid)) || Boolean(root) !== Boolean(parent)
+    || (root && (![root,parent].every(v => /^[1-9][0-9]{0,19}$/.test(String(v)))))
+    || (type === '1' ? !/^BV[0-9A-Za-z]{10}$/.test(String(bvid)) : (!dynamicId || bvid))) {
+  console.error('Invalid comment target or thread identifiers')
+  process.exit(2)
+}
 
 // --share（分享型）：正文里必须 @ 主人 —— 没写 @ 就自动补上。
 // 昵称取配置的 owner.name（space/wbi/acc/info 可能被风控，不实时查）；
@@ -216,6 +223,11 @@ if (missing.length) {
 const cookieHeader = `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const referer = refererArg !== '' ? refererArg : `https://www.bilibili.com/video/${bvid}/`
+// Node 24 exposes the original primitive token. Recover integer IDs before
+// Number rounding can make a different target or receipt appear to match.
+const preciseJson = async response => JSON.parse(await response.text(), (_key,value,context) =>
+  typeof value === 'number' && !Number.isSafeInteger(value) && Number.isInteger(value)
+    ? context?.source ?? null : value)
 
 // ---- WBI signing (harmless if the endpoint does not ask for it) -------------
 const MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
@@ -254,10 +266,22 @@ if (type === '1') {
   const viewResponse=await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
     headers:{'user-agent':UA,referer,cookie:cookieHeader},
   })
-  const view=await viewResponse.json()
+  const view=await preciseJson(viewResponse)
   if (!viewResponse.ok || view.code !== 0 || !/^[1-9][0-9]{0,19}$/.test(String(view.data?.aid))
       || String(view.data.aid) !== String(oid) || view.data.bvid !== bvid) {
     console.error('Bili video target does not match supplied oid/BVID; publishing refused')
+    process.exit(3)
+  }
+} else {
+  const detailResponse=await fetch(`https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=${dynamicId}`, {
+    headers:{'user-agent':UA,referer,cookie:cookieHeader},
+  })
+  const detail=await preciseJson(detailResponse)
+  const item=detail.data?.item
+  if (!detailResponse.ok || detail.code !== 0 || String(item?.id_str) !== dynamicId
+      || String(item?.basic?.comment_id_str) !== String(oid)
+      || String(item?.basic?.comment_type) !== type) {
+    console.error('Bili dynamic target does not match supplied oid/type; publishing refused')
     process.exit(3)
   }
 }
@@ -449,13 +473,13 @@ const res = await fetch(url, {
   },
   body,
 })
-const out = await res.json().catch(async () => ({ raw: await res.text() }))
+const out = await preciseJson(res).catch(() => ({}))
 console.log(`  HTTP ${res.status}`)
 console.log(`  code=${out.code} message=${out.message ?? ''}`)
 if (out.code === 0) {
   const rpid = out.data?.rpid_str ?? out.data?.rpid
   if (!res.ok || !/^[1-9][0-9]{0,19}$/.test(String(rpid))) { console.error('Unconfirmed comment response; verify before retrying'); process.exit(6) }
-  confirmReceipt('comment',rpid,`https://www.bilibili.com/video/${bvid}/#reply${rpid}`)
+  confirmReceipt('comment',rpid,type === '1' ? `https://www.bilibili.com/video/${bvid}/#reply${rpid}` : `${referer}#reply${rpid}`)
   console.log(`  ✅ 已发布，评论 rpid=${rpid}`)
   // 鱼群保护：这条如果是“聚拢”到某条鱼楼的回复，记一笔，避免下次又回同一条。
   if (fishPlan?.ok && fishPlan.gatherTarget && parent

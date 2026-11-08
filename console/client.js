@@ -87,7 +87,7 @@ window.__ModuleLoader__.load({
       const overview=overviewState(data,{busy,error});
       return h('section',{className:'ck','aria-label':'筷子运行控制台'},h('style',null,styles),
         h('header',{className:'ck-head'},h('div',null,h('p',{className:'ck-eyebrow'},'CHOPSTICKS / 运行追踪'),h('h2',null,'筷子'),h('p',{className:'ck-sub'},'从收到事件，到模型输出与工具执行。')),
-          h('div',{className:'ck-actions'},h('span',{className:'ck-status'},h('i',{className:'ck-dot'}),paused?'自动刷新已暂停':'每 8 秒刷新'),h('button',{onClick:()=>setPaused(!paused),'aria-pressed':paused},paused?'恢复刷新':'暂停'),h('button',{disabled:busy,onClick:()=>refresh()},busy?'读取中…':'刷新'))),
+          h('div',{className:'ck-actions'},h('a',{href:'/api/chopsticks',target:'_blank',rel:'noopener'},'人际关系 ↗'),h('span',{className:'ck-status'},h('i',{className:'ck-dot'}),paused?'自动刷新已暂停':'每 8 秒刷新'),h('button',{onClick:()=>setPaused(!paused),'aria-pressed':paused},paused?'恢复刷新':'暂停'),h('button',{disabled:busy,onClick:()=>refresh()},busy?'读取中…':'刷新'))),
         h('nav',{role:'tablist','aria-label':'控制台页面'},...tabs.map(([id,label])=>h('button',{key:id,role:'tab','aria-selected':tab===id,onClick:()=>setTab(id)},label))),
         error&&h('p',{className:'ck-error',role:'alert'},error,'。可点击刷新重试；已有数据保留。'),
         tab==='overview' ? h(React.Fragment,null,

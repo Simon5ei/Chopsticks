@@ -27,7 +27,7 @@ export function textOf(segments) {
 export const imageSegments = segments => segments.filter(s => s.type === 'image' || s.type === 'mface');
 export function officialImageUrl(raw) {
   let url; try { url = new URL(raw); } catch { throw new Error('Unsupported QQ image URL'); }
-  const hosts = ['qpic.cn', 'qq.com', 'gtimg.cn', 'gtimg.com'];
+  const hosts = ['qpic.cn', 'qq.com', 'nt.qq.com.cn', 'gtimg.cn', 'gtimg.com'];
   if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')
     || !hosts.some(host => url.hostname === host || url.hostname.endsWith(`.${host}`))) throw new Error('Unsupported QQ image URL');
   return url.href;

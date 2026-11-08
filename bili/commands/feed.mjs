@@ -293,5 +293,4 @@ if (opt.json) {
     console.log(`  ${String(shown).padStart(2)}. ${x.bv}  ${String(safeNumber(x.d)).padStart(4)}s  弹幕${String(safeNumber(x.dm)).padStart(7)}  播放${String(safeNumber(x.play)).padStart(9)}  ${String(x.t).slice(0, 40)}  @${x.up} ${hits}`)
   }
   if (!selection.picked.length) console.log('  （没有可看的了：候选都被看过/最近推过；把 --recent-days 调小或等新视频）')
-  console.log('\n看完跑：node bili.mjs debrief <BV>   → 然后把"想法"写进日记的「想说」区（不发）')
 }

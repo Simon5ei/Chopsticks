@@ -24,6 +24,96 @@ const inbound = (extra = {}) => ({ post_type: 'message', message_type: 'group', 
   message_id: 123, time: 1700000000, sender: { nickname: 'friend' }, message: [{ type: 'text', data: { text: 'hello' } }], ...extra });
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('cancelling image lookup interrupts gateway metadata request too',async t=>{
+ let started;
+ const ready=new Promise(r=>{started=r;});
+ const f=await fixture({fetchImpl:async(url,opts)=>{
+  if(url.endsWith('get_login_info'))return response({user_id:'90001'});
+  if(url.endsWith('get_image')){
+   started();return await new Promise((resolve,reject)=>{
+    opts.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});
+   });
+  }
+  assert.fail('Unexpected download');
+ }});t.after(()=>f.adapter.close());
+ f.socket.message(inbound({message:[{type:'image',data:{file:'opaque-image-id'}}]}));await settle();
+ const controller=new AbortController();const pending=f.adapter.getImage({channel:'g:20001',messageId:'123',maxImages:1,signal:controller.signal});
+ const rejected=assert.rejects(pending);await ready;controller.abort();
+ const timeout=new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('metadata cancellation did not propagate')),100);timer.unref();});
+ await Promise.race([rejected,timeout]);
+});
+
+test('image source lookup can request one image and cancel before any download',async t=>{
+ const downloads=[];
+ const f=await fixture({fetchImpl:async(url,opts)=>{
+  if(opts.body)return response({user_id:'90001'});
+  downloads.push({url,signal:opts.signal});return new Response(Buffer.from('GIF89a'),{headers:{'content-type':'image/gif'}});
+ }});t.after(()=>f.adapter.close());
+ f.socket.message(inbound({message:[{type:'image',data:{url:'https://qpic.cn/a'}},{type:'image',data:{url:'https://qpic.cn/b'}}]}));await settle();
+ const c=new AbortController();c.abort();
+ await assert.rejects(f.adapter.getImage({channel:'g:20001',messageId:'123',maxImages:1,signal:c.signal}));
+ assert.equal(downloads.length,0);
+ const live=new AbortController();const result=await f.adapter.getImage({channel:'g:20001',messageId:'123',maxImages:1,signal:live.signal});
+ assert.equal(result.content.length,1);assert.equal(downloads.length,1);assert.ok(downloads[0].signal instanceof AbortSignal);
+});
+
+test('accepts the current QQ multimedia CDN while refusing look-alike hosts', async t => {
+  const downloads = [];
+  const f = await fixture({ fetchImpl: async (url, options) => {
+    if (options.body) return response({ user_id: '90001' });
+    downloads.push(url);
+    return new Response(Buffer.from('GIF89a'), { headers: { 'content-type': 'image/gif' } });
+  } });
+  t.after(() => f.adapter.close());
+  f.socket.message(inbound({ message: [{ type: 'image', data: { url: 'https://multimedia.nt.qq.com.cn/download?appid=1&fileid=2' } }] }));
+  await settle();
+  const result = await f.adapter.getImage({ channel: 'g:20001', messageId: '123', maxImages: 1 });
+  assert.equal(result.content.length, 1);
+  assert.equal(downloads.length, 1);
+  assert.equal(result.content[0].mimeType, 'image/gif');
+
+  const g = await fixture();
+  t.after(() => g.adapter.close());
+  g.socket.message(inbound({ message_id: 124, message: [{ type: 'image', data: { url: 'https://multimedia.nt.qq.com.cn.evil.test/download' } }] }));
+  await settle();
+  await assert.rejects(g.adapter.getImage({ channel: 'g:20001', messageId: '124', maxImages: 1 }), /Unsupported QQ image URL/);
+});
+
+test('an expired QQ image URL is refreshed through the gateway file reference', async t => {
+  const requests = [];
+  const f = await fixture({ fetchImpl: async (url, options) => {
+    if (options.body) {
+      const body = JSON.parse(options.body);
+      requests.push({ url, body });
+      return response(url.endsWith('get_login_info') ? { user_id: '90001' } : { url: 'https://qpic.cn/fresh' });
+    }
+    if (url === 'https://qpic.cn/expired') return new Response('expired', { status: 403 });
+    if (url === 'https://qpic.cn/fresh') return new Response(Buffer.from('GIF89a'), { headers: { 'content-type': 'image/gif' } });
+    return new Response('missing', { status: 404 });
+  } });
+  t.after(() => f.adapter.close());
+  f.socket.message(inbound({ message: [{ type: 'image', data: { url: 'https://qpic.cn/expired', file: 'stable.jpg' } }] }));
+  await settle();
+  const result = await f.adapter.getImage({ channel: 'g:20001', messageId: '123', maxImages: 1 });
+  assert.equal(result.content.length, 1);
+  assert.equal(result.content[0].mimeType, 'image/gif');
+  assert.ok(requests.some((request) => request.url.endsWith('get_image') && request.body.file === 'stable.jpg'));
+});
+
+test('a gateway returning the same expired URL does not loop or fake a download', async t => {
+  const f = await fixture({ fetchImpl: async (url, options) => {
+    if (options.body) {
+      const body = JSON.parse(options.body);
+      return response(url.endsWith('get_login_info') ? { user_id: '90001' } : { url: 'https://qpic.cn/expired' });
+    }
+    return new Response('expired', { status: 403 });
+  } });
+  t.after(() => f.adapter.close());
+  f.socket.message(inbound({ message: [{ type: 'image', data: { url: 'https://qpic.cn/expired', file: 'stable.jpg' } }] }));
+  await settle();
+  await assert.rejects(f.adapter.getImage({ channel: 'g:20001', messageId: '123', maxImages: 1 }), /QQ image download failed/);
+});
+
 test('normalizes admissible inbound once with trusted admin and preserves media fields', async t => {
   const f = await fixture(); t.after(() => f.adapter.close());
   const event = inbound({ message: [{ type: 'at', data: { qq: '90001' } }, { type: 'text', data: { text: '管理员 hello' } },

@@ -1,20 +1,76 @@
 {
   "stateDir": "/var/lib/chopsticks/state",
   "fishHome": "/var/lib/chopsticks/fish",
-  "model": { "provider": "deepseek-official", "model": "deepseek-flash" },
+  "model": {
+    "provider": "deepseek-official",
+    "model": "deepseek-flash"
+  },
   "qq": {
     "enabled": true,
     "httpUrl": "http://127.0.0.1:3000",
     "wsUrl": "ws://127.0.0.1:3001",
     "token": "REPLACE_OUTSIDE_REPOSITORY",
     "ownerId": "123456",
-    "allowGroups": ["123456789"],
-    "allowUsers": ["123456"],
+    "allowGroups": [
+      "123456789"
+    ],
+    "allowUsers": [
+      "123456"
+    ],
     "denyUsers": []
   },
-  "development": { "enabled": true, "workspace": "/root/workspace/dsh" },
-  "bili": { "enabled": true, "allowWrite": false, "intervalMs": 1800000, "maxVideos": 3 },
-  "webSearch": { "provider": "auto", "apiKeyEnv": "DEEPSEEK_API_KEY" },
+  "development": {
+    "enabled": true,
+    "workspace": "/root/workspace/dsh"
+  },
+  "maibot": {
+    "enabled": false,
+    "python": "python3",
+    "plugins": []
+  },
+  "reminders": {
+    "enabled": false
+  },
+  "bili": {
+    "enabled": true,
+    "allowWrite": false,
+    "intervalMs": 1800000,
+    "maxVideos": 3
+  },
+  "webSearch": {
+    "provider": "auto",
+    "apiKeyEnv": "DEEPSEEK_API_KEY"
+  },
+  "imageSource": {
+    "lens": {
+      "enabled": true,
+      "browser": "",
+      "proxy": "",
+      "doh": "https://cloudflare-dns.com/dns-query",
+      "profileDir": ""
+    }
+  },
   "routerTimeoutMs": 90000,
-  "wakeGapMs": 10000
+  "wakeGapMs": 10000,
+  "routing": {
+    "layered": false
+  },
+  "life": {
+    "enabled": false,
+    "maxQueuedRoundsPerDay": 24
+  },
+  "qzone": {
+    "enabled": false
+  },
+  "heybox": {
+    "enabled": false
+  },
+  "douyin": {
+    "enabled": false,
+    "desktopUser": "fish",
+    "headless": false,
+    "chromePath": "/opt/chrome/chrome-linux64/chrome",
+    "userStateDir": "/home/fish/.local/share/chopsticks-life/douyin"
+  },
+  "platformTurnTimeoutMs": 600000
 }

@@ -73,14 +73,14 @@ test('completed worker without report becomes waiting and keeps task resumable',
   assert.equal((await f.coordinator.status(origin, task.id)).state, 'waiting'); assert.equal(f.results.length, 1);
   await f.coordinator.follow(origin, task.id, 'Use a second source'); await f.coordinator.flush(); assert.equal(f.prompts.length, 2);
 });
-test('DSH executor creates new preset and advertises only Chopsticks tools', async t => {
+test('DSH executor selects research preset and preserves task input', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chopsticks-executor-test-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const creates = [], prompts = [];
   const executor = createDshExecutor({ workerRoot: root, controller: { inspect: async () => { throw Object.assign(new Error('absent'), { code: 'session/not-found' }); },
     create: async r => { creates.push(r); return { sessionId: r.sessionId }; }, prompt: async r => { prompts.push(r); return { accepted: true }; } } });
   await executor.ensureSession({ sessionId: 'chopsticks-worker-test' }); assert.equal(creates[0].agentPreset, 'chopsticks-research-worker');
   await executor.prompt({ sessionId: 'chopsticks-worker-test', deliveryId: 'prompt:1', text: 'Task' });
-  assert.match(prompts[0].content[0].text, /chopsticks_recall/); assert.match(prompts[0].content[0].text, /chopsticks_task_report/);
+  assert.match(prompts[0].content[0].text, /Task/); assert.equal(prompts[0].requestId, "prompt:1");
   assert.doesNotMatch(prompts[0].content[0].text, /surfcore/i);
 });
 test('DSH executor result callback replaces direct prompt and retains authorization guard', async () => {
@@ -97,4 +97,29 @@ test('DSH executor keeps default delivery and rechecks authorization after cold 
   assert.equal(prompts.length, 0);
   const defaultExecutor = createDshExecutor({ controller: { prompt: async r => { prompts.push(r); return { accepted: true }; } } });
   await defaultExecutor.deliverResult({ sessionId: 'origin', text: 'Result', deliveryId: 'result:3' }); assert.equal(prompts.length, 1);
+});
+
+test('shared sessions deliver each ticket with its persisted origin through the result callback', async t => {
+  const callbacks = [], nativePrompts = [];
+  const dsh = createDshExecutor({ controller: { prompt: async r => nativePrompts.push(r) }, onResult: async r => { callbacks.push(r); return { accepted: true }; } });
+  const f = setup(t, { deliverResult: dsh.deliverResult });
+  const firstCaller = { role: 'qq', sessionId: 'shared', chatKey: 'p:1', characterId: 'fish' };
+  const secondCaller = { role: 'qq', sessionId: 'shared', chatKey: 'p:2', characterId: 'fish' };
+  const first = await f.coordinator.submit(firstCaller, { requestId: 'one', prompt: 'First' });
+  const second = await f.coordinator.submit(secondCaller, { requestId: 'two', prompt: 'Second' });
+  firstCaller.chatKey = 'p:changed'; secondCaller.chatKey = 'p:changed';
+  await f.coordinator.flush();
+  for (const [task, prompt] of [[first, f.prompts[0]], [second, f.prompts[1]]]) {
+    const worker = f.coordinator.getWorkerContext(prompt.sessionId);
+    await f.coordinator.report(worker, { ticketId: task.id, state: 'ready', summary: 'Done', deliveryId: prompt.deliveryId });
+  }
+  await f.coordinator.flush();
+  assert.deepEqual(callbacks.map(({ ticketId, origin }) => ({ ticketId, origin })), [
+    { ticketId: first.id, origin: { sessionId: 'shared', chatKey: 'p:1', characterId: 'fish', role: 'qq' } },
+    { ticketId: second.id, origin: { sessionId: 'shared', chatKey: 'p:2', characterId: 'fish', role: 'qq' } },
+  ]);
+  assert.ok(callbacks.every(r => r.sessionId === 'shared' && r.deliveryId && r.text && r.signal && r.isStillAuthorized()));
+  assert.equal(nativePrompts.length, 0);
+  assert.deepEqual(await dsh.deliverResult({ ...callbacks[0], isStillAuthorized: () => false }), { accepted: false });
+  assert.equal(callbacks.length, 2);
 });

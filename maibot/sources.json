@@ -1,0 +1,8 @@
+{
+  "sdk": {"repository":"https://github.com/Mai-with-u/maibot-plugin-sdk","commit":"aa9ab7b347f9d011a3e0b00addee46de8f16bf9e","version":"2.21.0","mode":"external dependency"},
+  "plugins": [
+    {"kind":"date","id":"github.xiexiaojia780.date-context-plugin","version":"1.4.6","repository":"https://github.com/xiexiaojia780/date_context_plugin","commit":"72098e2919b7df9cc31d4431c87a09f63db8aba7","mode":"original Python tools, prompt hooks disabled"},
+    {"kind":"wiki","id":"xxxxx7258.moegirl-wiki-plugin","version":"2.1.2","repository":"https://github.com/YukiSakiko/moegirl_wiki_plugin","commit":"24a7e870afb1900bae7f85a14f9b0af8e34b951b","mode":"original Python business logic, controlled host HTTP transport"},
+    {"kind":"reminders","id":"xhstoyea.maibot-reminder","version":"1.0.0","repository":"https://github.com/xhstoyea/maibot-reminder","commit":"f9cd339462699ed3da042dccc60ed642f9b2a7bf","mode":"native adaptation of scoped set/list/cancel and proactive intent contract; SQLite replaces TOML scheduler"}
+  ]
+}

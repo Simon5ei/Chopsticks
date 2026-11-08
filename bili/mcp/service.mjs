@@ -4,6 +4,7 @@ import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 export { assertBiliUrl } from './network.mjs';
@@ -61,15 +62,15 @@ const id = z.string().regex(/^[1-9][0-9]{0,19}$/);
 const video = text(500).refine(s => { try { normalizeBvid(s); return true; } catch { return false; } }, 'Invalid BVID or video URL');
 const mode = z.enum(['dry','go']).default('dry');
 const definitions = [
-  ['bili_video','Read video metadata, cover, sampled comments and subtitle evidence. Missing tracks are reported; video watching is recorded.', { bvid:video }, false],
+  ['bili_video','读取视频信息、封面、评论样本及可用字幕，返回缺失项并记录读取历史。', { bvid:video }, false],
   ['bili_search','Search public Bilibili videos.', { query:text(200), page:z.number().int().min(1).max(5).default(1) }, false],
-  ['bili_subtitles','Read available official subtitles with timestamps. Absence is not proof of video contents.', { bvid:video, language:z.string().regex(/^[a-zA-Z0-9-]{2,20}$/).default('ai-zh'), lines:z.number().int().min(1).max(600).default(200) }, false],
+  ['bili_subtitles','读取带时间戳的官方字幕；无可用轨道时返回缺失状态。', { bvid:video, language:z.string().regex(/^[a-zA-Z0-9-]{2,20}$/).default('ai-zh'), lines:z.number().int().min(1).max(600).default(200) }, false],
   ['bili_comments','Read a public comment thread (up to 200 replies), or sampled top comments when no root is supplied.', { bvid:video, oid:id.optional(), root:id.optional() }, false],
   ['bili_dynamic','Inspect one public dynamic.', { id }, false],
-  ['bili_history','Read current character public Bili watching metadata only. Omit query or use an empty string for recent history; query is a literal keyword filter, not a natural-language instruction.', { query:z.union([z.literal(''),text(100)]).optional(), limit:z.number().int().min(1).max(50).default(20), days:z.number().int().min(0).max(3650).default(0) }, false],
-  ['bili_frames','Extract a bounded contact sheet and subtitle strip; returns actual images. May take up to 150 seconds. Sampled frames do not capture the entire video.', { bvid:video, grid:z.enum(['3x3','4x4']).default('3x3') }, false],
-  ['bili_comment','Post one guarded video comment or dry preview. Requires trusted operator/Bili scheduler authorization; no automatic retries.', { bvid:video, oid:id, message:text(2000), root:id.optional(), parent:id.optional(), mode }, true],
-  ['bili_dynamic_post','Post one guarded public text dynamic or dry preview. Requires trusted operator/Bili scheduler authorization; no automatic retries.', { text:text(2000), mode }, true],
+  ['bili_history','查询当前角色的B站观看记录。query 为关键词；省略或留空返回最近记录。', { query:z.union([z.literal(''),text(100)]).optional(), limit:z.number().int().min(1).max(50).default(20), days:z.number().int().min(0).max(3650).default(0) }, false],
+  ['bili_frames','抽取视频画面和字幕图，返回采样图像；最长约150秒。', { bvid:video, grid:z.enum(['3x3','4x4']).default('3x3') }, false],
+  ['bili_comment','预览或提交B站评论。type=1使用bvid；type=11/17使用dynamicId。mode=dry预览，go提交。目标由oid/root/parent指定，结果未知时先核验。', { bvid:video.optional(), dynamicId:id.optional(), type:z.union([z.literal(1),z.literal(11),z.literal(17)]).default(1), oid:id, message:text(2000), root:id.optional(), parent:id.optional(), mode }, true],
+  ['bili_dynamic_post','预览或发布文字动态。mode=dry预览，go提交；结果未知时先核验。', { text:text(2000), mode }, true],
 ].map(([name,description,shape,write]) => ({ name,description,schema:z.object(shape).strict(),write }));
 
 export function scrub(value, secrets = []) {
@@ -98,6 +99,7 @@ export function createBiliService(options = {}) {
     let scratch;
     let executingWrite = false;
     let reservedWrite = false;
+    let socialReservation;
     const secrets = [];
     try {
       const definition = definitions.find(d => d.name === name);
@@ -137,11 +139,20 @@ export function createBiliService(options = {}) {
         case 'bili_frames': script='commands/bili-watch.mjs'; args=[bvid,a.grid,scratch,'--uniform']; break;
         case 'bili_comment':
           if (Boolean(a.root) !== Boolean(a.parent)) throw new Error('root and parent must be provided together');
-          script='commands/comment.mjs'; args=['--oid',a.oid,'--bvid',bvid,'--message',a.message,...(a.root ? ['--root',a.root,'--parent',a.parent] : []),`--${a.mode}`]; break;
+          if (a.type === 1 ? (!bvid || a.dynamicId) : (!a.dynamicId || bvid)) throw new Error('Type 1 requires only bvid; type 11/17 requires only dynamicId');
+          if (a.type !== 1) source=`https://t.bilibili.com/${a.dynamicId}`;
+          script='commands/comment.mjs'; args=['--oid',a.oid,'--type',String(a.type),...(a.type === 1 ? ['--bvid',bvid] : ['--referer',source]),'--message',a.message,...(a.root ? ['--root',a.root,'--parent',a.parent] : []),`--${a.mode}`]; break;
         case 'bili_dynamic_post': script='commands/dynamic.mjs'; args=['post','--text',a.text,`--${a.mode}`]; break;
       }
       if (definition.write && context.role !== 'operator') args.push('--auto');
-      executingWrite = definition.write && a.mode === 'go';
+      const actualWrite = definition.write && a.mode === 'go';
+      if (actualWrite && name === 'bili_comment' && options.socialPolicy) {
+        const requestId = context.requestId || context.eventId;
+        if (![requestId,context.sessionId].every(v => typeof v === 'string' && v.length > 0 && v.length <= 256)) throw new Error('Bounded trusted Bili request identity required');
+        const intentId = 'bili-comment:' + createHash('sha256').update(JSON.stringify([context.sessionId,requestId,name,args])).digest('hex');
+        socialReservation = options.socialPolicy.reserve({platform:'bili',action:'comment',intentId});
+      }
+      executingWrite = actualWrite;
       const result = await runner(path.join(toolsDir,script),args,{
         artifactDir:scratch, signal:context.signal, timeoutMs:Math.min(options.timeoutMs || 150000,150000), maxBuffer:512*1024,
         env:{ ...environment, HOME:scratch, USERPROFILE:scratch, CHOPSTICKS_BILI_ARTIFACTS:scratch, CHOPSTICKS_BILI_RECEIPT:path.join(scratch,'receipt.json') },
@@ -153,9 +164,10 @@ export function createBiliService(options = {}) {
         try { receipt = JSON.parse(await fs.readFile(path.join(scratch,'receipt.json'),'utf8')); } catch {}
         if (!receipt || receipt.status !== 'confirmed' || !/^[1-9][0-9]{0,19}$/.test(String(receipt.id))) throw new Error('No confirmed Bili publishing receipt');
         const kind = name === 'bili_comment' ? 'comment' : 'dynamic';
-        const url = kind === 'comment' ? `https://www.bilibili.com/video/${bvid}/#reply${receipt.id}` : `https://t.bilibili.com/${receipt.id}`;
+        const url = kind === 'comment' ? `${source}#reply${receipt.id}` : `https://t.bilibili.com/${receipt.id}`;
         if (receipt.kind !== kind || receipt.url !== url) throw new Error('Invalid Bili publishing receipt');
         receipt = {status:'confirmed',kind,id:String(receipt.id),url};
+        if (socialReservation) options.socialPolicy.settle(socialReservation,{deliveryState:'confirmed'});
         output = output.split(/\r?\n/).filter(line => !line.startsWith('CHOPSTICKS_BILI_RECEIPT ')).join('\n');
       }
       if (failed) output += `\nBili command failed (exit ${Number(result.code) || 1}); evidence above may be incomplete.` + (executingWrite ? ' Write outcome may be uncertain; verify before retrying.' : '');
@@ -183,7 +195,8 @@ export function createBiliService(options = {}) {
     } catch (error) {
       // Never echo stack, subprocess argv/environment or arbitrary SDK errors.
       const message = String(error?.message || 'Bili operation failed');
-      return { isError:true,content:[{ type:'text',text:scrub(message,secrets).slice(0,500) + (executingWrite ? ' Write outcome may be uncertain; verify before retrying.' : '') }] };
+      const notSent = !executingWrite && error?.deliveryState === 'not_sent' && /^SOCIAL_[A-Z_]+$/.test(error?.code || '');
+      return { isError:true,...(notSent ? {structuredContent:{deliveryState:'not_sent',code:error.code}} : {}),content:[{ type:'text',text:scrub(message,secrets).slice(0,500) + (executingWrite ? ' Write outcome may be uncertain; verify before retrying.' : '') }] };
     } finally {
       if (scratch) await fs.rm(scratch,{recursive:true,force:true}).catch(() => {});
       if (reservedWrite) writeBusy = false;

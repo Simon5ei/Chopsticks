@@ -23,7 +23,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     return ticket && !ticket.ended && !cancelled(ticket) && latest(ticket)?.id === effect.assignmentId;
   };
   function validateCaller(caller) {
-    if (!caller || !['operator', 'qq', 'bili', 'worker'].includes(caller.role)) throw new Error('Untrusted caller');
+    if (!caller || !['operator', 'qq', 'bili', 'bili-dm', 'douyin', 'heybox', 'qzone', 'wechat', 'worker'].includes(caller.role)) throw new Error('Untrusted caller');
     text(caller.sessionId, 'session', 200); text(caller.chatKey, 'chat scope', 300); text(caller.characterId, 'character', 100);
     if (caller.role === 'worker') {
       const binding = store.get('worker', caller.sessionId);
@@ -46,9 +46,12 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
   function project(ticket) {
     const assignment = latest(ticket), worker = store.list('worker').find(w => w.assignmentId === assignment?.id);
     const pending = effects.list().filter(e => e.ticketId === ticket.id && !['done', 'dropped'].includes(e.state));
+    const source = repo.triggers.get(ticket.origin.triggerId).meta;
     return { id: ticket.id, state: cancelled(ticket) ? 'stopped' : ticket.ended?.outcome ?? assignment?.report?.state ?? assignment?.state ?? 'pending',
       summary: assignment?.report?.summary ?? '', workerSessionId: worker?.sessionId,
       origin: origin(ticket), createdAt: ticket.createdAt, updatedAt: ticket.updatedAt,
+      ...source.sourceEventId ? {source:{eventId:source.sourceEventId,threadId:source.sourceThreadId}} : {},
+      subscriptions:store.list('source-thread').filter(row=>repo.threads.get(row.key)?.subscriptions.includes(ticket.id)).map(({threadId,chatKey,characterId})=>({threadId,chatKey,characterId})),
       deliveryState: pending.some(e => e.state === 'uncertain') ? 'uncertain' : pending.length ? 'pending' : 'settled' };
   }
   function schedule() {
@@ -69,7 +72,10 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     policy: () => ({ version: 'chopsticks-readonly-v1', paused: false, evalTimeoutMs: 30000,
       gate: trigger => ({ admissible: true, strength: 'explicit', basis: { via: 'addressed', addressed: 'direct', sender: trigger.actor.id } }),
       revalidate: () => true, admitsInferred: () => false }),
-    scope: { scope: () => ({ listened: true, observed: false }) },
+    // A host-supplied explicit Router choice must not first auto-fanout to all
+    // existing subscribers. Intake still durably stores this immutable Trigger;
+    // decide/attach below owns its routing through the same Engine.
+    scope: { scope: trigger => trigger.meta?.routerDecision ? {listened:false,reason:'explicit_router_decision'} : { listened: true, observed: false } },
     assessor: { request() {} },
     prepareTicket(ticket) {
       // Upstream executors build their first instruction from origin; this adapter
@@ -89,11 +95,11 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
         const worker = workerBinding(ticket, assignment);
         const content = ticket.inputs.filter(i => inputIds.includes(i.id)).map(i => i.kind === 'trigger' ? repo.triggers.get(i.triggerId)?.text : i.text).filter(Boolean).join('\n\n');
         const previous = ticket.assignments.filter(a => a.id !== assignment.id && a.report).at(-1)?.report?.summary;
-        const context = previous ? `Original request (context, do not repeat completed work):\n${repo.triggers.get(ticket.origin.triggerId).text}\nPrevious findings:\n${previous}\n\nCurrent request:\n` : '';
+        const context = previous ? `原始任务：\n${repo.triggers.get(ticket.origin.triggerId).text}\n已有结果：\n${previous}\n\n本次追加：\n` : '';
         const deliveryId = `prompt:${assignment.id}:${hash(inputIds)}`;
         queue({ id: deliveryId, kind: 'prompt', ticketId: ticket.id, assignmentId: assignment.id,
           sessionId: worker.sessionId, inputIds,
-          text: `[Chopsticks task ${ticket.id}] Read-only delegated work. Preserve source identity. Do not send QQ/Bili messages or perform writes. Report structured progress/result using chopsticks_task_report with ticketId=${ticket.id} and deliveryId=${deliveryId}.\n\n${context}${content}` });
+          text: `ticketId=${ticket.id}\ndeliveryId=${deliveryId}\n\n${context}${content}` });
       },
       stop(ticket, assignment, reason) {
         // A completed worker may still be inside its report tool call. Do not abort that call.
@@ -113,6 +119,56 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     return { id, source: 'chopsticks', threads: [{ source: 'chopsticks', id: threadId }], actor: { source: 'dsh', id: caller.sessionId },
       human: true, addressed: 'direct', at: new Date().toISOString(), text: prompt, meta: { caller },
       channel: { source: 'dsh', thread: threadId, address: { sessionId: caller.sessionId } } };
+  }
+  function cancelEffects(id) {
+    store.put('cancelled', id, { at: new Date().toISOString() });
+    if (!repo.tickets.get(id).ended) engine.stopTicket(id, 'Stopped by origin or operator');
+    for (const effect of effects.list()) if (effect.ticketId === id && effect.kind !== 'abort' && effect.state !== 'done') effects.set(effect.id, 'dropped');
+  }
+  function abortEffects(id) {
+    for (const [effectId, controller] of inFlight) if (effects.get(effectId)?.ticketId === id) controller.abort();
+  }
+  /** Host-only: event/thread coordinates must be derived from the consumed
+   * canonical source, never copied from model-authored tool arguments. */
+  async function routeSource(caller,args) {
+    caller=validateCaller(caller);
+    if(caller.role==='worker')throw Error('Workers cannot route sources');
+    const eventId=text(args?.eventId,'source event ID',512),threadId=text(args?.threadId,'source thread ID',512);
+    const requestId=text(args?.requestId,'request ID',512),decision=args?.decision;
+    text(args?.text,'source text');const body=args.text;
+    if(!['accept','attach','ignore','stop'].includes(decision))throw Error('Invalid source decision');
+    const ticketId=['attach','stop'].includes(decision)?text(args.ticketId,'task ID',512):undefined;
+    if(ticketId===undefined&&args.ticketId!==undefined)throw Error('Task target is only valid for attach or stop');
+    const eventKey=hash([caller.characterId,caller.chatKey,eventId]),requestKey=hash([caller.characterId,caller.chatKey,requestId]);
+    const digest=hash([eventId,threadId,body,decision,ticketId]);
+    const view=row=>({...row.ticketId?project(repo.tickets.get(row.ticketId)):{},decision:row.decision,eventId,threadId,...row.ticketId?{ticketId:row.ticketId}:{}});
+    const result=store.atomic(()=>{
+      const request=store.get('source-request',requestKey),previous=store.get('source-route',eventKey);
+      if(request&&(request.eventKey!==eventKey||request.digest!==digest))throw Error('Source request ID conflict');
+      if(previous){if(previous.digest!==digest)throw Error('Source event conflict');store.put('source-request',requestKey,{eventKey,digest});return view(previous);}
+      if(ticketId){
+        const ticket=requireTask(caller,ticketId),owner=origin(ticket);
+        if(owner.chatKey!==caller.chatKey||owner.characterId!==caller.characterId)throw Error('Task not found in caller scope');
+        if(decision==='attach'&&cancelled(ticket))throw Error('Task stopped');
+      }
+      const nativeThreadId=`source-thread:${hash([caller.characterId,caller.chatKey,threadId])}`;
+      const input=trigger(caller,`source:${eventKey}`,body,nativeThreadId);
+      input.meta={...input.meta,routerDecision:true,sourceEventId:eventId,sourceThreadId:threadId};
+      // The upstream key is source + ':' + id; the source itself is constant.
+      store.put('source-thread',nativeThreadId,{key:`chopsticks:${nativeThreadId}`,threadId,chatKey:caller.chatKey,characterId:caller.characterId});
+      engine.receive(input);
+      let target=ticketId;
+      if(decision==='attach')engine.attach(ticketId,input.id);
+      else {
+        const routed=engine.decide(input.id,decision==='accept'?{kind:'accept',title:'Chopsticks source task',scope:'Read-only research and origin-scoped recall',reason:'Explicit host Router decision'}:{kind:decision,reason:'Explicit host Router decision',...ticketId?{ticketId}:{}});
+        if(decision==='accept'){target=routed.ticketId;if(!target)throw Error('Engine did not accept source task');}
+        if(decision==='stop')cancelEffects(ticketId);
+      }
+      const row={digest,eventId,threadId,decision,...target?{ticketId:target}:{}};
+      store.put('source-route',eventKey,row);store.put('source-request',requestKey,{eventKey,digest});return view(row);
+    });
+    if(decision==='stop')abortEffects(ticketId);
+    schedule();return result;
   }
   async function submit(caller, args) {
     caller = validateCaller(caller);
@@ -138,7 +194,10 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     if (cancelled(ticket)) throw new Error('Task stopped');
     prompt = text(prompt, 'follow-up');
     const initial = repo.triggers.get(ticket.origin.triggerId);
-    engine.receive(trigger(validateCaller(caller), `follow:${randomUUID()}`, prompt, initial.threads[0].id));
+    store.atomic(()=>{
+      const input=trigger(validateCaller(caller), `follow:${randomUUID()}`, prompt, initial.threads[0].id);
+      input.meta.routerDecision=true;engine.receive(input);engine.attach(id,input.id);
+    });
     schedule(); return project(repo.tickets.get(id));
   }
   async function status(caller, id) {
@@ -148,12 +207,8 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
   async function stop(caller, id) {
     const ticket = requireTask(caller, id);
     if (caller.role === 'worker') throw new Error('Worker cannot stop task');
-    store.atomic(() => {
-      store.put('cancelled', id, { at: new Date().toISOString() });
-      if (!ticket.ended) engine.stopTicket(id, 'Stopped by origin or operator');
-      for (const effect of effects.list()) if (effect.ticketId === id && effect.kind !== 'abort' && effect.state !== 'done') effects.set(effect.id, 'dropped');
-    });
-    for (const [effectId, controller] of inFlight) if (effects.get(effectId)?.ticketId === id) controller.abort();
+    store.atomic(() => cancelEffects(id));
+    abortEffects(id);
     schedule(); return project(repo.tickets.get(id));
   }
   async function report(caller, { ticketId, state, summary, deliveryId }) {
@@ -229,7 +284,10 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
         // The last synchronous check immediately precedes the external acceptance boundary.
         if (cancelled(repo.tickets.get(effect.ticketId))) { effects.set(effect.id, 'dropped'); return; }
         const send = effect.kind === 'result' ? deliverResult : executor.prompt;
-        const receipt = await send({ sessionId: effect.sessionId, text: effect.text, deliveryId: effect.id, signal: controller.signal, isStillAuthorized });
+        const source = effect.kind === 'result' ? origin(repo.tickets.get(effect.ticketId)) : undefined;
+        const sourceMeta=source&&repo.triggers.get(repo.tickets.get(effect.ticketId).origin.triggerId).meta;
+        const resultContext = source && { ticketId: effect.ticketId, origin: { sessionId: source.sessionId, chatKey: source.chatKey, characterId: source.characterId, role: source.role,...sourceMeta.sourceEventId?{eventId:sourceMeta.sourceEventId,threadId:sourceMeta.sourceThreadId}:{} } };
+        const receipt = await send({ sessionId: effect.sessionId, text: effect.text, deliveryId: effect.id, signal: controller.signal, isStillAuthorized, ...resultContext });
         if (cancelled(repo.tickets.get(effect.ticketId))) { effects.set(effect.id, 'dropped'); return; }
         if (receipt?.accepted === false) {
           // A definite rejection (e.g. foreground busy) is safe to retry; exceptions are not.
@@ -307,7 +365,7 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
     schedule(); return project(repo.tickets.get(ticket.id));
   }
   schedule();
-  return { submit, follow, status, stop, report, workerEnded, flush, close,
+  return { submit, routeSource, follow, status, stop, report, workerEnded, flush, close,
     start(){if(!closed){autoStart=true;schedule();}},
     getWorkerContext(sessionId) {
       const worker = store.get('worker', sessionId), ticket = worker && repo.tickets.get(worker.ticketId);

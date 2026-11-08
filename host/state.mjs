@@ -16,10 +16,10 @@ export function createHostState(store){
   async send(id,input,perform){
    if(typeof id!=='string'||!id)throw Error('Stable send id required');
    const digest=hash(input),prior=db.prepare('SELECT * FROM host_sends WHERE id=?').get(id);
-   if(prior){if(prior.digest!==digest)throw Error('Idempotency payload changed');if(prior.state==='confirmed')return JSON.parse(prior.value);throw Error('Send uncertain: inspect receipt before deliberate recovery');}
+   if(prior){if(prior.digest!==digest)throw Error('Idempotency payload changed');if(prior.state==='confirmed')return JSON.parse(prior.value);throw Error(prior.state==='not_sent'?'Send not_sent: new deliberate source decision required':'Send uncertain: inspect receipt before deliberate recovery');}
    db.prepare('INSERT INTO host_sends VALUES(?,?,?,?)').run(id,digest,'sending','{}');
    try {const receipt=await perform();db.prepare('UPDATE host_sends SET state=?,value=? WHERE id=?').run('confirmed',JSON.stringify(receipt),id);return receipt;}
-   catch(error){db.prepare('UPDATE host_sends SET state=? WHERE id=?').run('uncertain',id);throw error;}
+   catch(error){const deliveryState=error?.deliveryState==='not_sent'?'not_sent':'uncertain';const diagnostic={deliveryState,...typeof error?.receiptId==='string'&&/^[A-Za-z0-9:_-]{1,128}$/.test(error.receiptId)?{receiptId:error.receiptId}:{},...typeof error?.code==='string'&&/^[A-Z0-9_]{1,80}$/.test(error.code)?{code:error.code}:{},...Number.isSafeInteger(error?.apiCode)?{apiCode:error.apiCode}:{},...typeof error?.endpoint==='string'&&/^\/[A-Za-z0-9/_-]{1,160}$/.test(error.endpoint)?{endpoint:error.endpoint}:{}};db.prepare('UPDATE host_sends SET state=?,value=? WHERE id=?').run(deliveryState,JSON.stringify(diagnostic),id);throw error;}
   }
  };
 }
