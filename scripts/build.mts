@@ -9,6 +9,8 @@ const dist=path.join(root,'dist');
 if(fs.existsSync(dist)&&fs.lstatSync(dist).isSymbolicLink())throw Error('Refusing linked build directory');
 fs.rmSync(dist,{recursive:true,force:true});
 const result=spawnSync(process.execPath,['--max-old-space-size=640',path.join(root,'node_modules/typescript/bin/tsc')],{cwd:root,stdio:'inherit',timeout:180000,windowsHide:true});
+if(result.error)console.error(result.error.message);
+if(result.signal)console.error(`Compiler terminated: ${result.signal}`);
 if(result.error||result.status!==0)process.exit(result.status||1);
 let count=0,bytes=0;
 function copyTree(from:string,to:string,filter:(file:string)=>boolean){

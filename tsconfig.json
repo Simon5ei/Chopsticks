@@ -32,7 +32,6 @@
     "tests/**/*.mts",
     "types/**/*.d.ts",
     "src/vendor/**/*.mjs",
-    "src/vendor/**/*.mjs",
     "scripts/**/*.mts"
   ],
   "exclude": [

@@ -5,6 +5,8 @@ import {fileURLToPath} from 'node:url';
 import {commandExitStatus} from './process-result.mts';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const build=spawnSync(process.execPath,['scripts/build.mts'],{cwd:root,stdio:'inherit',timeout:180000,windowsHide:true});
+if(build.error)console.error(build.error.message);
+if(build.signal)console.error(`Build terminated: ${build.signal}`);
 if(build.error||build.status!==0)process.exit(build.status||1);
 const tests=fs.readdirSync(path.join(root,'dist/tests')).filter(name=>name.endsWith('.test.mjs')).map(name=>'dist/tests/'+name);
 if(tests.length>150)throw Error('Test file budget exceeded');
