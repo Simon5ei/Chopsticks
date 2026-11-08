@@ -14,3 +14,13 @@ Integration required: root wires trusted caller/admin and authoritative source r
 TDD evidence: first tests failed for missing knowledge/supervise, assignment-based session identity, shared development cwd; legacy-mode callback and concurrent-supervise/missing-agent regressions also observed red before fixes. Final affected test command `node --test tests/tasks*.test.mjs tests/dsh-executor-workspace.test.mjs`: 37 pass, 0 fail. Full npm test deferred to root integration as requested. No server commands or external sends.
 
 Review notes: knowledge output is bounded but underlying existing store repositories enumerate ticket rows; no new SQL query/index interface added under file ownership constraints. Supervision uses original worker/session and a new continuation note, not replay of accepted prompt IDs. Recovery is restricted to host-classified research and definite attached idle state. No model call for unchanged active healthy workers. Existing uncertainty receipt reconciliation remains intact.
+
+## Independent review fixes
+
+All three findings in modules-review.md reproduced with new failing regressions before code changes:
+
+- Async `isRunning` now revalidates the complete ticket/supervision/unresolved-effect snapshot after the await. Any intervening progress/input/effect change invalidates that observation; it cannot authorize continuation or status prompting.
+- Failed/blocked reports now require attention and do not consume `resumed`. Vendor automatic-note hold behavior is preserved; no human authorization is synthesized.
+- A durable last-inspected ticket cursor rotates the bounded selection across every call and restart. Cursor advances for healthy/cooling tickets too, avoiding the newest-first prefix starvation.
+
+Verification: `node --test tests/tasks*.test.mjs tests/dsh-executor-workspace.test.mjs` — 40 pass, 0 fail. Full suite remains deferred to root integration. No server access or external sends.

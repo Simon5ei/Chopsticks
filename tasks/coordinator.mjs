@@ -396,20 +396,34 @@ export function createCoordinator({ stateDir, executor, deliverResult, inspectDe
   async function superviseOnce({now=Date.now(),staleMs=300000,cooldownMs=300000,limit=25}={}) {
     if(!Number.isFinite(now)||!Number.isFinite(staleMs)||!Number.isFinite(cooldownMs))throw Error('Invalid supervision clock');
     const result={checked:0,actions:[],attention:[]};
-    for(const ticket of repo.tickets.open().slice(0,Math.max(1,Math.min(100,Number(limit)||25)))) {
+    const open=repo.tickets.open(), count=Math.max(1,Math.min(100,Number(limit)||25));
+    const cursor=store.get('supervision-cursor','tasks')?.ticketId;
+    const start=cursor ? Math.max(0,open.findIndex(t=>t.id===cursor)+1)%Math.max(1,open.length) : 0;
+    const selected=[...open.slice(start),...open.slice(0,start)].slice(0,count);
+    for(let ticket of selected) {
+      // Advance even for healthy/cooling tickets, so older work gets a turn.
+      store.put('supervision-cursor','tasks',{ticketId:ticket.id});
       if(cancelled(ticket)||now-Date.parse(ticket.updatedAt)<Math.max(1,staleMs))continue;
       result.checked++;
-      const previous=store.get('supervision',ticket.id);
+      let previous=store.get('supervision',ticket.id);
       if(previous && now-previous.at<Math.max(1,cooldownMs))continue;
       const assignment=latest(ticket),worker=store.list('worker').find(w=>w.ticketId===ticket.id && w.assignmentId===assignment?.id);
-      const pending=effects.list().filter(e=>e.ticketId===ticket.id&&!['done','dropped'].includes(e.state));
+      const unresolved=()=>effects.list().filter(e=>e.ticketId===ticket.id&&!['done','dropped'].includes(e.state));
+      let pending=unresolved();
+      const observation=hash([ticket,previous,pending]);
       let state;try{if(worker && executor.isRunning)state=await executor.isRunning({sessionId:worker.sessionId});}catch{}
-      if(closed || cancelled(repo.tickets.get(ticket.id)) || latest(repo.tickets.get(ticket.id))?.id!==assignment?.id)continue;
+      const fresh=repo.tickets.get(ticket.id), freshPrevious=store.get('supervision',ticket.id);
+      pending=unresolved();
+      if(closed || cancelled(fresh) || fresh.ended || latest(fresh)?.id!==assignment?.id)continue;
+      // An idle result predating a prompt/report/effect transition proves nothing
+      // about the current worker. Inspect again on the next bounded iteration.
+      if(hash([fresh,freshPrevious,pending])!==observation)continue;
+      ticket=fresh;previous=freshPrevious;
       if(state?.running===true || state?.pending===true) {
         if(!previous?.statusRequested && assignment?.report?.state==='waiting') {store.atomic(()=>{engine.requestStatus(ticket.id);store.put('supervision',ticket.id,{...previous,at:now,statusRequested:true});});result.actions.push({ticketId:ticket.id,action:'status'});}
         continue;
       }
-      const safe=mode(ticket)==='research' && state?.running===false && state?.pending===false && !pending.length && !previous?.resumed;
+      const safe=mode(ticket)==='research' && state?.running===false && state?.pending===false && !pending.length && !previous?.resumed && !['failed','blocked'].includes(assignment?.report?.state);
       if(safe) {
         store.atomic(()=>{store.put('supervision',ticket.id,{...previous,at:now,resumed:true});engine.turnEnded(ticket.id,assignment.id);engine.note(ticket.id,'Continue the interrupted read-only research task from its existing evidence. Do not repeat external effects.');});
         result.actions.push({ticketId:ticket.id,action:'resume'});
