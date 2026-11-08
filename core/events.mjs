@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import {platformRoute,scopeChannels} from './platforms.mjs';
+import {platformRoute,scopeChannels,publicChannel} from './platforms.mjs';
 
 const kinds = new Set(['message.received', 'message.sent', 'task.result', 'timer']);
 const sensitiveKey = /(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential|private[_-]?key)/i;
@@ -78,6 +78,14 @@ export function createEventStore({ stateDir,sharePlatformPrivate=false }) {
     const clauses = [];
     if (groups) {const scope=scopeChannels(channel,{sharePlatformPrivate});clauses.push(scope.sql);values.push(...scope.args);}
     else { clauses.push('channel = ?'); values.push(channel); }
+    // Public source placement does not declassify a development Worker result.
+    // Other task.result evidence (platform reads, etc.) retains its old sharing.
+    if(groups){
+      const ticket="CASE WHEN json_valid(substr(core_events.meta,1,32000)) THEN json_extract(substr(core_events.meta,1,32000),'$.ticketId') ELSE '__unknown__' END";
+      const hasState=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='host_kv' LIMIT 1").get();
+      const research=publicChannel(channel)&&hasState?`EXISTS (SELECT 1 FROM host_kv WHERE kind='task-source' AND id=(${ticket}) AND CASE WHEN json_valid(substr(value,1,4096)) THEN json_extract(substr(value,1,4096),'$.mode') ELSE NULL END='research')`:'0';
+      clauses.push(`(channel=? OR kind!='task.result' OR (${ticket}) IS NULL OR ${research})`);values.push(channel);
+    }
     if (beforeSeq != null) { clauses.push('seq < ?'); values.push(boundedInt(beforeSeq, 0, Number.MAX_SAFE_INTEGER)); }
     if (query != null && String(query)) { clauses.push("text LIKE ? ESCAPE '\\'"); values.push(`%${String(query).slice(0, 500).replace(/[\\%_]/g, '\\$&')}%`); }
     values.push(boundedInt(limit, 20, 200));
