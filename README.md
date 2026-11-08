@@ -6,21 +6,14 @@
 
 项目主许可为 [GPL-3.0-only](LICENSE)，与 MaiBot 的 GPLv3 生态对齐。第三方代码保留各自的许可证和署名；此前已按 MIT 发布的代码保留原授权。详见 [来源与许可说明](NOTICE.md)。
 
-```mermaid
-flowchart LR
- QQ[QQ 消息 / 确认发送] --> Events[(统一事件日志)]
- Bili[B站浏览机会 / 确认发布] --> Events
- Events --> Router[全局 Router\n程序过滤 + 模型判断]
- Router --> Chat[各会话聊天执行器]
- Router --> Tasks[后台阅读执行器]
- Events --> Context[来源与引用\n共享公开经历 / 私聊原范围]
- Context --> Chat
- Context --> Tasks
- Chat --> Tools[QQ / B站 MCP / 网页工具]
- Tools --> Events
- Tasks --> Events
- Watchdog[超时与恢复检查] --> Router
-```
+## 已部署架构
+
+[按消息处理顺序查看完整架构](docs/architecture-deployed.md) · [矢量图](docs/diagrams/chopsticks-deployed.svg) · [可编辑图源](docs/diagrams/chopsticks-deployed.excalidraw)
+
+![筷子已部署架构](docs/diagrams/chopsticks-deployed.png)
+
+消息进入 → 程序过滤与入库 → 同会话固定 3 秒合批 → 按需选择领域 / 平台 → 领域 Router 决策 → 来源会话或任务 Worker → 工具执行与确认回执。Worker 结果重新入队，再由来源会话回复。
+
 
 ## 当前能力
 
