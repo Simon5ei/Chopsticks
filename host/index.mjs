@@ -49,6 +49,10 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  disposers.push(ctx.tools.guard(exec=>{if(runtime.layered&&exec.name.startsWith('mcp__cul__')){let caller;try{caller=nativeDesktop.caller(exec.agent.session.id)||who(exec);}catch{return '桌面操作没有活动来源';}if(!runtime.desktopLease.claim(caller))return '桌面正由另一轮活动使用';}}));
  const add=(name,description,parameters,execute)=>disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a,v)=>[{type:'text',text:JSON.stringify(v)}]},execute})));
  const source=exec=>{const c=who(exec);if(c.role==='worker')throw Error('Workers cannot control other tasks');return c;};
+ const contextSource=(exec,eventId)=>runtime.contextCaller(exec.agent.session.id,eventId);
+ add('chopsticks_context_search','检索近期2048条授权经历的前4096字，返回来源引用。',{query:str('检索词',true),limit:{type:'number'},eventId:str('Router本轮来源事件 ID')},(a,e)=>runtime.contextService.search(contextSource(e,a.eventId),{query:a.query,limit:a.limit}));
+ add('chopsticks_context_read','按事件、会话或任务引用展开授权证据。',{kind:{type:'string',enum:['event','thread','task'],required:true},id:str('事件 ID、会话 channel 或任务 ID',true),beforeSeq:{type:'number'},limit:{type:'number'},eventId:str('Router本轮来源事件 ID')},(a,e)=>runtime.contextService.read(contextSource(e,a.eventId),{kind:a.kind,id:a.id,beforeSeq:a.beforeSeq,limit:a.limit}));
+ add('chopsticks_tasks','发现授权范围内的任务摘要或读取任务。',{query:str('检索词'),id:str('任务 ID'),limit:{type:'number'},eventId:str('Router本轮来源事件 ID')},(a,e)=>runtime.coordinator.knowledge(contextSource(e,a.eventId),{query:a.query,id:a.id,limit:a.limit}));
  add('chopsticks_decide','提交本批事件的调度决定。',{actionsJson:str('本轮决策 JSON 数组；按场景使用 eventId、kind、domain/platform 或 ticketId。',true),moodUpdatesJson:str('可选心境评价 JSON 数组，只引用本轮明确提供的心境证据 ID。')},(a,e)=>runtime.decide(e.agent.session.id,a.actionsJson,a.moodUpdatesJson));
  add('chopsticks_send','给当前 QQ 会话发送消息。confirmed 表示已发送；context_changed 表示需结合新增消息重新判断。',{text:str('消息正文',true),replyTo:str('本会话消息 ID，可选')},(a,e)=>runtime.send(e.agent.session.id,a,e.signal));
  add('chopsticks_bili_reply','回复当前 B站评论或@通知，目标由本轮来源确定。confirmed 表示已发送；结果未知时先核验。',{text:str('自然回复正文',true)},(a,e)=>{
@@ -121,8 +125,14 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
   const result=typeof next==='function'?await next():assembly;
   if(['evolution','diary'].includes(caller.role))return result;
   const channel=caller.channel||caller.chatKey;const fresh=liveConversationContext(runtime,channel);
-  result.contexts=(result.contexts||[]).filter(c=>c.name!=='chopsticks-live');
+  result.contexts=(result.contexts||[]).filter(c=>!['chopsticks-live','chopsticks-tasks'].includes(c.name));
   result.contexts.push({name:'chopsticks-live',order:500,text:fresh.text,interpolate:false});
+  if(runtime.contextService){
+   // A Router with several pending source scopes may need an explicit event ID;
+   // prompt assembly cannot choose one on its behalf.
+   let taskCaller;try{taskCaller=runtime.contextCaller(agent.session.id);}catch{}
+   if(taskCaller){const overview=await runtime.contextService.overview(taskCaller);if(overview.tasks?.length)result.contexts.push({name:'chopsticks-tasks',order:501,text:JSON.stringify(overview).slice(0,1900),interpolate:false});}
+  }
   const bound=runtime.state.binding(agent.session.id);if(bound)runtime.state.bind(agent.session.id,{...bound,revision:fresh.revision});
   return result;
  }));

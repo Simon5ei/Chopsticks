@@ -9,6 +9,7 @@ export function apply(ctx,config={}){
  if(['qq','bili','bili-dm','qzone','heybox','douyin'].includes(mode))allowed.add('chopsticks_diary_write');
  if(mode==='evolution'){allowed.clear();for(const n of ['chopsticks_evolution_read','chopsticks_evolution_report'])allowed.add(n);}
  if(mode==='diary'){allowed.clear();for(const n of ['chopsticks_diary_write','chopsticks_diary_read','chopsticks_diary_search','chopsticks_diary_skip'])allowed.add(n);}
+ if(['router','worker','development','qq','bili','bili-dm','qzone','heybox','douyin'].includes(mode))for(const tool of ['chopsticks_context_search','chopsticks_context_read','chopsticks_tasks'])allowed.add(tool);
  const platform=mode==='bili'||mode==='bili-dm'?'bilibili':['qq','qzone','heybox','douyin'].includes(mode)?mode:null;
  if(platform)for(const action of ['status','read','write'])allowed.add(`mcp__${platform}__${platform}_${action}`);
  if(mode==='bili-dm')for(const tool of ['bili_video','bili_subtitles'])allowed.add(`mcp__bilibili__${tool}`);
