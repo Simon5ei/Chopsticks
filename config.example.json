@@ -5,6 +5,10 @@
     "provider": "deepseek-official",
     "model": "deepseek-flash"
   },
+  "routing": {
+    "layered": false,
+    "batchWindowMs": 3000
+  },
   "qq": {
     "enabled": true,
     "httpUrl": "http://127.0.0.1:3000",
@@ -52,9 +56,6 @@
   },
   "routerTimeoutMs": 90000,
   "wakeGapMs": 10000,
-  "routing": {
-    "layered": false
-  },
   "life": {
     "enabled": false,
     "maxQueuedRoundsPerDay": 24
