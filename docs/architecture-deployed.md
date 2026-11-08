@@ -8,7 +8,7 @@
 
 蓝色表示既有处理，紫色表示模型参与，橙色或“本轮增强”标识第一轮落地部分，绿色表示结果与回执。实线按上到下阅读；最外侧橙色虚线是 **Worker 结果重新进入事件链路**。
 
-浅黄色表示既有心境能力。图中 **⑤ → M2、M4 → ⑥A** 是同一流程的编号连接：心境在 Router 评估时更新，在来源会话表达时使用。下方同时展示后台生活、反思、人际关系、日记和健康观察；这些模块按配置启用，不是每条消息必经的串行步骤。
+浅黄色标明主流程内的心境状态处理。**⑤内部依次准备证据、同轮评估、事务提交，随后⑥A读取已提交心境生成表达**。心境没有单独的调度入口或执行会话。后台生活的输入位于①；反思、人际关系、日记和健康观察在图下方列明各自触发方式。
 
 ## 一条消息如何走完
 
@@ -18,8 +18,8 @@
 | ② 程序处理 | 根据来源、唤醒、潜水和密度规则决定是否调度；原始事件入库、按 ID 去重。无需唤醒的事件可保留为背景，不因此调用模型。 | [host/runtime.mjs](../host/runtime.mjs) 的 `ingest`、[core/events.mjs](../core/events.mjs) |
 | ③ 合批 | 生产配置 `routing.batchWindowMs=3000`。按 `channel` 开固定窗口；后来消息不延长截止时间。群里第一句已唤醒后，窗口内不带 @ 的补充也可加入。 | [core/batching.mjs](../core/batching.mjs) |
 | ④ 选择领域 / 平台 | 程序计算当前已到期、可处理的候选。只有一个领域直接选择；多领域竞争且没有可复用选择时，总 Router 才参与。领域内多平台同样按需选择。 | [core/router.mjs](../core/router.mjs) 的 `pump`、[core/platforms.mjs](../core/platforms.mjs) |
-| ⑤ 做决定 | IM Router 或内容 Router 对批次评估，通过 `chopsticks_decide` 提交动作。本批最多保留一个非 `observe` 动作，引用实际原始事件。 | [host/runtime.mjs](../host/runtime.mjs) 的 `assess` / `decide` |
-| ⑥A 会话执行 | `respond` 进入对应持久会话。QQ 每个联系人、每个群各有独立会话；同会话排队，其他会话可以继续。管理员开发要求先由来源会话接收，再用 `chopsticks_develop` 委派。 | [host/platform-sessions.mjs](../host/platform-sessions.mjs)、[host/development.mjs](../host/development.mjs) |
+| ⑤ 评估与提交 | `mood.prepare` 准备本轮可用的公开心境证据，与批次上下文一起交给 IM / 内容 Router。一次 `chopsticks_decide` 返回调度动作与可选心境评价；校验后在同一事务中保存调度决定、执行 `mood.commit` 更新心境，提交后才派发动作。本批最多一个非 `observe` 动作。 | [core/router.mjs](../core/router.mjs)、[host/runtime.mjs](../host/runtime.mjs) 的 `assess` / `decide` |
+| ⑥A 会话执行 | `respond` 进入对应持久会话，执行时调用 `mood.expression(channel)`，将符合条件的当前心境加入本轮表达上下文。QQ 每个联系人、每个群各有独立会话；同会话排队，其他会话可以继续。管理员开发要求先由来源会话接收，再用 `chopsticks_develop` 委派。 | [host/platform-sessions.mjs](../host/platform-sessions.mjs)、[host/development.mjs](../host/development.mjs) |
 | ⑥B 任务执行 | `task` 可建立后台研究任务；`attach` 把明确引用的任务接入来源背景。Worker 身份按任务复用，新开发 Worker 有独立目录。跨群研究背景不增加操作权限或对外发布目标。 | [tasks/coordinator.mjs](../tasks/coordinator.mjs)、[tasks/dsh-executor.mjs](../tasks/dsh-executor.mjs) |
 | ⑦ 工具调用 | 来源会话调用平台 / MCP 工具；研究 Worker 阅读与检索；开发 Worker 通过 `chopsticks_exec` 执行当前授权操作。 | [host/index.mjs](../host/index.mjs)、[host/guard.mjs](../host/guard.mjs)、[host/commands.mjs](../host/commands.mjs) |
 | ⑧ 结果确认 | 平台发送必须取得回执才能成为 `message.sent`。Worker 报告进度；完成结果形成 `task.result`，重新入队，由来源会话处理回复。结果不确定时不盲目重放。 | [host/reply-tickets.mjs](../host/reply-tickets.mjs)、[host/delivery-completion.mjs](../host/delivery-completion.mjs)、`runtime` 的 `onResult` |
@@ -42,15 +42,21 @@ flowchart TD
     C --> E{所选领域}
     E -->|chat| F[IM Router：QQ 等 IM 来源]
     E -->|surf| G[内容 Router：内容平台私信 / 浏览 / 互动]
-    F --> H[领域内按需选平台，再评估当前批次]
+    F --> H[领域内按需选平台]
     G --> H
-    H --> I[chopsticks_decide：observe / respond / task / attach / stop]
+    H --> J[准备批次上下文与可用心境证据]
+    J --> I[同轮评估：调度动作与可选心境评价]
+    I --> K[同一事务提交：调度决定与心境状态]
+    K --> L{派发动作}
+    L -->|respond| M[来源会话读取当前心境并执行回复]
+    L -->|task / attach| N[任务协调器 / Worker]
+    L -->|observe / stop| O[记录 / 停止]
     classDef program fill:#dbeafe,stroke:#1e40af,color:#374151;
     classDef model fill:#ddd6fe,stroke:#6d28d9,color:#374151;
     classDef added fill:#fed7aa,stroke:#c2410c,color:#374151;
     class A added;
-    class B,C,E program;
-    class D,F,G,H,I model;
+    class B,C,E,J,K,L,O program;
+    class D,F,G,H,I,M,N model;
 ```
 
 浏览活动的 `task` 决定会归入该平台执行会话继续阅读，不会自动替换成一个新的后台 Worker。`attach` / `stop` 的 Router 决定要求原始输入明确给出任务引用；第一轮并未实现任意任务的自动合并。
@@ -66,16 +72,16 @@ flowchart TD
 
 独立会话、经历检索范围和操作权限是不同概念。当前分层模式下，通用历史上下文仍有**平台内私聊共享**策略；新增 `context_*` 工具读取私聊时按当前来源限制。公开经历可跨群，任务控制与开发授权另行校验。具体范围见 [core/platforms.mjs](../core/platforms.mjs)、[core/events.mjs](../core/events.mjs) 和 [host/context-service.mjs](../host/context-service.mjs)。
 
-## 心境接在评估与表达之间
+## 主流程中的心境处理细节
 
 心境由 [host/mood.mjs](../host/mood.mjs) 接入，数值演化使用 [vendor/cerebrum/affect.mjs](../vendor/cerebrum/affect.mjs)。这是**模拟的表达状态**；当前没有把上游库全部能力接入规划、权限或工具执行。
 
 | 图中节点 | 实际行为 |
 |---|---|
-| M1 证据 | 从事件日志读取真实公开经历。当前代码范围是 QQ 群 `g:*` 和 `bili:public`，不泛指所有平台的公开内容。接纳收到的消息、带确认消息 ID 的发送，以及明确标为已经历的任务结果；排除私聊、内部、迁移、导入和合成事件。公开轮次可以推进积压证据，定时机会本身不算情绪证据。 |
-| M2 评价 | 领域 Router 评估批次时，`mood.prepare` 按有界游标提供最多 8 条证据；模型在同一次 `chopsticks_decide` 中可选提交 `moodUpdatesJson`。九个评价维度为相关性、一致性、新颖度、确定性、主体性、控制感、规范、紧迫性、影响程度。没有依据可以省略，不独立增加一轮心境 LLM 评估。 |
-| M3 状态 | 程序验证完整维度、数值范围和精确来源 ID；与 Router 决策一起事务提交，防止重复评价。情绪类别与强度、效价 / 唤醒度、慢变心境由数值系统演化；随时间回归基线。状态、来源游标和最近 30 次更新记录保存在事件数据库的 `cerebrum_*` 表。 |
-| M4 表达 | 来源会话执行时读取 `mood.expression(channel)`。仅在 `express` 模式、已有有效评价且为上述公开来源时，附加简短情绪标签与强度；私聊不注入。它不决定是否回复，不改变任务授权、工具权限或配额。 |
+| 5.1 准备证据 | 从事件日志读取真实公开经历。当前代码范围是 QQ 群 `g:*` 和 `bili:public`，不泛指所有平台的公开内容。接纳收到的消息、带确认消息 ID 的发送，以及明确标为已经历的任务结果；排除私聊、内部、迁移、导入和合成事件。公开轮次可以推进积压证据，定时机会本身不算情绪证据。 |
+| 5.2 同轮评价 | 领域 Router 评估批次时，`mood.prepare` 按有界游标提供最多 8 条证据；模型在同一次 `chopsticks_decide` 中可选提交 `moodUpdatesJson`。九个评价维度为相关性、一致性、新颖度、确定性、主体性、控制感、规范、紧迫性、影响程度。没有依据可以省略，不独立增加一轮心境 LLM 评估。 |
+| 5.3 事务提交 | 程序验证完整维度、数值范围和精确来源 ID；与 Router 决策一起事务提交，防止重复评价。情绪类别与强度、效价 / 唤醒度、慢变心境由数值系统演化；随时间回归基线。状态、来源游标和最近 30 次更新记录保存在事件数据库的 `cerebrum_*` 表。 |
+| ⑥A 会话表达 | 来源会话执行时读取 `mood.expression(channel)`。仅在 `express` 模式、已有有效评价且为上述公开来源时，附加简短情绪标签与强度；私聊不注入。它不决定是否回复，不改变任务授权、工具权限或配额。 |
 
 管理页 [`/api/chopsticks/mood`](http://192.168.5.234:3080/api/chopsticks/mood) 展示情绪、效价 / 唤醒度、慢变心境、来源及更新历史，可切换 `paused`（暂停评价与表达）、`observe`（更新但不参与表达）、`express`（更新并参与公开表达）。读取状态时按时间计算衰减；刷新页面不会制造新经历或调用模型。功能总开关为 `cerebrum.enabled`。
 
