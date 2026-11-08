@@ -24,3 +24,9 @@ All three findings in modules-review.md reproduced with new failing regressions 
 - A durable last-inspected ticket cursor rotates the bounded selection across every call and restart. Cursor advances for healthy/cooling tickets too, avoiding the newest-first prefix starvation.
 
 Verification: `node --test tests/tasks*.test.mjs tests/dsh-executor-workspace.test.mjs` — 40 pass, 0 fail. Full suite remains deferred to root integration. No server access or external sends.
+
+## Development cwd integration hook
+
+Added optional executor `onWorkspace({sessionId,cwd,ticketId})`, awaited only after a newly-created development session confirms the requested session identity. Existing sessions invoke no callback and retain their cwd. Mismatched create results do not publish a mapping. Existing workerRoot/tasks/hash layout retained per integration request.
+
+Regression first failed for missing callback, then passed. Affected task/executor suite now 41 pass, 0 fail.

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 const missing = error => ['session/not-found','SESSION_QUERY_SESSION_NOT_FOUND'].includes(error?.code) || error?.name==='ApiSessionNotFound' || error?.constructor?.name==='ApiSessionNotFound';
-export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,getAgent=()=>null,onResult,resolveWorker=()=>({mode:'research'})}) {
+export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,getAgent=()=>null,onResult,onWorkspace,resolveWorker=()=>({mode:'research'})}) {
   const signal=new AbortController().signal;
   const admit=async(request,deliverySignal,isStillAuthorized)=>{
     const revoked=()=>deliverySignal?.aborted||isStillAuthorized?.()===false;
@@ -44,6 +44,7 @@ export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,
         check();const workspaceId=await prepareWorkspace?.({cwd,title:'后台任务'});check();
         const created=await controller.create({sessionId,...workspaceId?{workspaceId}:{cwd},agentPreset:resolveWorker(sessionId).mode==='development'?'chopsticks-development-worker':'chopsticks-research-worker'});
         if(created.sessionId!==sessionId) throw Error('DSH 未复用指定任务会话，停止以保护映射');
+        if(resolveWorker(sessionId).mode==='development')await onWorkspace?.({sessionId,cwd,ticketId:ticket?.id});
       }
       check();if(model?.provider&&model?.model)await controller.selectModel({sessionId,...model});
     },

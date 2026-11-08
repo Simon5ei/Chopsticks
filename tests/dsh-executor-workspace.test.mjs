@@ -48,3 +48,11 @@ test('missing attached native agent is unknown rather than proof of idle',async(
  const executor=createDshExecutor({controller:{},getAgent:()=>undefined});
  assert.deepEqual(await executor.isRunning({sessionId:'cold'}),{running:null,pending:null});
 });
+
+test('new development workspace is published only after confirmed session creation',async t=>{
+ const workerRoot=fs.mkdtempSync(path.join(os.tmpdir(),'dev-workspace-callback-'));t.after(()=>fs.rmSync(workerRoot,{recursive:true,force:true}));const published=[];let created=false;
+ const executor=createDshExecutor({workerRoot,resolveWorker:()=>({mode:'development'}),onWorkspace:async value=>{assert.equal(created,true);published.push(value);},controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(r){created=true;return {sessionId:r.sessionId};}}});
+ await executor.ensureSession({sessionId:'dev',ticket:{id:'stable-ticket'}});assert.equal(published.length,1);assert.equal(published[0].ticketId,'stable-ticket');assert.equal(published[0].sessionId,'dev');assert.equal(path.dirname(published[0].cwd),path.join(workerRoot,'tasks'));
+ const restored=createDshExecutor({workerRoot,resolveWorker:()=>({mode:'development'}),onWorkspace:async()=>assert.fail('existing session must retain its cwd'),controller:{async inspect(){return {};}}});await restored.ensureSession({sessionId:'old',ticket:{id:'old'}});
+ const mismatch=createDshExecutor({workerRoot,resolveWorker:()=>({mode:'development'}),onWorkspace:async()=>assert.fail('unconfirmed mapping'),controller:{async inspect(){throw Object.assign(Error('missing'),{code:'session/not-found'});},async create(){return {sessionId:'different'};}}});await assert.rejects(mismatch.ensureSession({sessionId:'requested',ticket:{id:'requested'}}),/映射/);
+});
