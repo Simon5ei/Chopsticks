@@ -44,12 +44,19 @@ identifying its owner. Keep actual owner values outside Git.
   tools/guards, evolution reports and operation-health recording.
 - [x] Add failing privacy and repeated-write-failure tests; implement shared
   privacy rule and a durable operation hold with explicit repair release.
-- [ ] Verify exact existing destination via native metadata; register current
+- [x] Verify exact existing destination via native metadata; register current
   Heybox and Douyin failures without new external sends. Preserve previous code,
   config, identity and histories before deployment.
-- [ ] Run serial bounded local suite and isolated real DSH/model acceptance;
+- [x] Run serial bounded local suite and isolated real DSH/model acceptance;
   independently review changes, push only owned changes and deploy after passing.
 
 Review focus: hostile bug text is evidence, not authority; private sources do not
 leak through the queue; new intent IDs cannot evade held operations; crash windows
 do not duplicate debug work; unrelated existing changes remain preserved.
+
+Deployment evidence: code revision `0ce8059`, backed-up DSH cutover, fresh ready
+health and connected QQ transport. The exact existing debug session consumed the
+two seeded production incidents as one batch; later watchdog issues remained
+queued while that batch was running. Owner identity/config credentials and native
+histories were preserved. Platform comment recovery remains subject to individual
+repair receipts; deployment itself is not proof of a successful platform write.
