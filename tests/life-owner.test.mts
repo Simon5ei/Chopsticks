@@ -50,6 +50,20 @@ test('actual operation failure is available to watchdog without private content'
  assert.equal(f.state.get('health','life-operation:heybox:detail').state,'verification_required');
 });
 
+test('deterministic write failure pauses the operation across new sources and intent labels',async t=>{
+ const f=fixture(t,{write:()=>({confirmed:false,state:'refused',code:'CONTROL_NOT_UNIQUE'})});
+ const run=(n)=>f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'ticket'+n,action:'comment',targetId:'a',text:'hello'+n,intentId:'intent'+n}});
+ assert.equal((await run(1)).code,'CONTROL_NOT_UNIQUE');f.binding.eventId='another';f.binding.requestId='another';
+ assert.equal((await run(2)).code,'OPERATION_HELD');assert.equal(f.calls,1);assert.equal(f.state.get('operation-hold','heybox:comment').code,'CONTROL_NOT_UNIQUE');
+});
+
+test('verification-required without a code is visible and prevents blind new-intent writes',async t=>{
+ const f=fixture(t,{write:()=>({confirmed:false,state:'verification_required'})});
+ const run=(n)=>f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'t',action:'comment',targetId:'a',text:'hello'+n,intentId:'intent'+n}});
+ await run(1);assert.equal(f.state.get('health','life-operation:heybox:comment').state,'verification_required');
+ assert.equal((await run(2)).code,'OPERATION_HELD');assert.equal(f.calls,1);
+});
+
 test('unknown write retains safe accepted ID and operation health without enabling replay',async (t?: any) =>{
  const f=fixture(t,{write:()=>({confirmed:false,state:'unknown',code:'readback_verification_required',receiptId:'222'})});
  const req={platform:'heybox',operation:'write',args:{ticket:'ticket',action:'comment',targetId:'a',text:'hello',intentId:'uncertain-id'}};

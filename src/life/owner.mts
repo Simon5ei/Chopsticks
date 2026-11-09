@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {assertOwnerPrivacy} from '../host/owner-privacy.mjs';
 import {publishInput} from './publish-input.mjs';
 import {operatorDmBinding} from './operator-dm.mjs';
 import {createLivePlatformTests} from './live-platforms.mjs';
@@ -33,7 +34,14 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
  function track<T>(fn: () => T | PromiseLike<T>): Promise<T>{if(closed)throw fail();const p=Promise.resolve().then(fn);pending.add(p);p.finally(()=>pending.delete(p)).catch(()=>{});return p;}
  function authorizedScope(binding?: any,platform?: any){if(!binding||binding.platform!==platform||typeof binding.channel!=='string')throw fail();const route=platformRoute(binding.channel);const expected=platform==='bilibili'?'bili':platform;if(route.platform!==expected||binding.scope!==route.scope)throw fail();return route.scope;}
  function allowed(item?: any,scope?: any,platform?: any){if(item.visibility==='public')return scope==='public';if(item.visibility==='friends')return platform==='qzone'&&scope==='qzone:friends';if(item.visibility==='private')return scope===`private:${platform==='bilibili'?'bili':platform}`;return false;}
- function operationHealth(platform?: any,action?: any,value?: any,error: boolean=false){const code=safeCode(value?.code);const receiptId=typeof value?.receiptId==='string'&&/^[A-Za-z0-9:_-]{1,128}$/.test(value.receiptId)?value.receiptId:undefined;state.put?.('health',`life-operation:${platform}:${action}`,{state:/verification_required/i.test(code||'')?'verification_required':/login_required/i.test(code||'')?'login_required':error||value?.confirmed===false?'unknown':'ready',at:now(),...code?{code}:{},...receiptId?{receiptId}:{}});return Object.assign(fail(),{...code?{code:code.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,80)}:{},...receiptId?{receiptId}:{}});}
+ function operationHealth(platform?: any,action?: any,value?: any,error: boolean=false){
+  const code=safeCode(value?.code)||(['verification_required','login_required'].includes(value?.state)?value.state:undefined);
+  const receiptId=typeof value?.receiptId==='string'&&/^[A-Za-z0-9:_-]{1,128}$/.test(value.receiptId)?value.receiptId:undefined;
+  state.put?.('health',`life-operation:${platform}:${action}`,{state:/verification_required/i.test(code||'')?'verification_required':/login_required/i.test(code||'')?'login_required':error||value?.confirmed===false?'unknown':'ready',at:now(),...code?{code}:{},...receiptId?{receiptId}:{}});
+  if(['comment','reply','publish','dm','like'].includes(action)&&/^(?:CONTROL_NOT_UNIQUE|(?:readback_)?verification_required|login_required)$/i.test(code||''))
+   state.put?.('operation-hold',`${platform}:${action}`,{code,at:now(),active:true,uncertain:!['refused','login_required','verification_required'].includes(value?.state)});
+  return Object.assign(fail(),{...code?{code:code.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,80)}:{},...receiptId?{receiptId}:{}});
+ }
  async function handle({platform,operation,args={}}: { platform?: any; operation?: any; args?: Record<string, any>; [key: string]: any }, {operator=false,signal:requestSignal}: { operator?: boolean; signal?: any; [key: string]: any }={}){return track(async()=>{
   const signal=AbortSignal.any([controller.signal,...(requestSignal?[requestSignal]:[])]);const ensureActive=()=>{if(signal.aborted)throw fail();};ensureActive();
   const adapter=owners[platform];if(!names.includes(platform)||!adapter)throw fail();
@@ -68,6 +76,9 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
   if(typeof targetId!=='string'||!targetId.trim()||targetId.length>512||typeof intentId!=='string'||!intentId.trim()||intentId.length>256||(action!=='like'&&(typeof text!=='string'||!text.trim()||text.length>4000)))throw fail();
   if(action==='publish'){const own=platform==='qzone'?'own-friends':'own-public', visibility=platform==='qzone'?'friends':'public';if(targetId!==own||binding.allowedOwnTarget!==own||scope!==(platform==='qzone'?'qzone:friends':'public')||(args.visibility!=null&&args.visibility!==visibility))throw fail();}
   if(action!=='publish'&&targetId!==String(binding.sourceTargetId||binding.targetId))throw fail();
+  const hold=state.get?.('operation-hold',`${platform}:${action}`);
+  if(hold?.active){if(hold.uncertain)throw fail();return {confirmed:false,state:'refused',code:'OPERATION_HELD'};}
+  if(text)assertOwnerPrivacy(text,{config,channel:binding.channel});
   const date=dateParts(now()),day=`${date.year}-${date.month}-${date.day}`,category=action==='like'?'likes':action==='publish'?'posts':'comments',maximum={likes:12,posts:2,comments:8}[category];
   const publish=action==='publish'?publishInput(args,config):{};const writeContext=Object.keys(publish).length?{...binding,...publish}:binding;
   const input={...publish,platform,source:binding.requestId||binding.eventId,action,targetId,parentId:parentId||'',text:text||''},sendId=`life:${digest(input)}`;

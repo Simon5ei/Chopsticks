@@ -14,6 +14,26 @@ const saveAll=async (f?: any) =>{await f.sessions.start();await flush();for(cons
 const consume=(f?: any,call?: any)=>f.sessions.event(call.sessionId,{type:'user/message',data:{source:{rpcId:call.action.dispatchId}}});
 const report=(call?: any,id?: any)=>({scope:call.event.meta.scope,facts:[{text:'聊了茶',sourceEventIds:[id]}],hypotheses:[{text:'可能喜欢茶，待确认',sourceEventIds:[id]}],relationships:[]});
 
+test('watchdog automatically reports operation failures and reflection accepts only sourced bug findings',async t=>{
+ const f=fixture(t),bugs=[];f.opts['onBug']=(source,input)=>{bugs.push({source,input});return {persisted:true};};
+ await f.evo.close();const evo=module.createEvolution(f.opts);t.after(()=>evo.close());
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'CONTROL_NOT_UNIQUE',at:1000001}]};
+ add(f,'source','g:1');await f.sessions.start();await evo.start();await flush();
+ assert.equal(bugs.length,1);assert.equal(bugs[0].input.code,'CONTROL_NOT_UNIQUE');
+ const c=f.calls.find(x=>x.event.channel==='evolution:reflection');consume(f,c);
+ const input={...report(c,'source'),problems:[{component:'privacy',code:'owner_disclosure',summary:'owner disclosure risk',sourceEventIds:['source']}]};
+ assert.throws(()=>evo.report(c.sessionId,{...input,problems:[{...input.problems[0],sourceEventIds:['forged']}]}));
+ evo.report(c.sessionId,input);assert.equal(bugs.length,2);assert.equal(bugs[1].source.kind,'reflection');
+});
+test('watchdog only submits fresh health observations once and reporting overload does not stop evolution',async t=>{
+ const f=fixture(t),bugs=[];f.opts['onBug']=(source,input)=>{bugs.push(input);if(input.code==='capacity')throw Error('Bug queue capacity reached');};
+ await f.evo.close();const evo=module.createEvolution(f.opts);t.after(()=>evo.close());
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'old',at:999999}]};await evo.poll();assert.equal(bugs.length,0);
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'fresh',at:1000001}]};await evo.poll();await evo.poll();assert.equal(bugs.length,1);
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'capacity',at:1000002}]};await assert.doesNotReject(evo.poll());
+ assert.equal(f.state.get('health','bug-reporting').state,'error');assert.ok(f.state.get('evolution-cursor','watchdog'));
+});
+
 test('social review excludes content comments before inference and publishes a durable graph after saving',async (t?: any) =>{
  const f=fixture(t);add(f,'group','g:1');add(f,'comment','bili:public');add(f,'dm','bili:dm:42');add(f,'feed','qzone:friends');
  await f.sessions.start();await f.evo.start();await flush();

@@ -1,3 +1,5 @@
+import {BUG_REPORT_RULE} from '../src/host/bug-pipeline.mjs';
+import {OWNER_PRIVACY_RULE} from '../src/host/owner-privacy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,7 +24,7 @@ async function hostFixture(){
   coordinator:{knowledge:(...a)=>{calls.push(['knowledge',...a]);return [];}}};
  const config={stateDir:'fixture',fishHome:'fixture'},req=(n)=>n==='@deepseek-ai/dsh-tools'?{defineTool:(v)=>v}:{createMcpToolDefinition:(_c?: any,v?: any)=>v};req.resolve=()=>import.meta.filename;
  const source=fs.readFileSync(new URL('../src/host/index.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/gm,'').replaceAll('export ','');
- const context={fs,path,process:{env:{CHOPSTICKS_CONFIG:'fixture',DSH_RUNTIME_PACKAGE:import.meta.filename},argv:[]},createRequire:()=>req,readJSON:()=>config,
+ const context={fs,path,OWNER_PRIVACY_RULE,BUG_REPORT_RULE,process:{env:{CHOPSTICKS_CONFIG:'fixture',DSH_RUNTIME_PACKAGE:import.meta.filename},argv:[]},createRequire:()=>req,readJSON:()=>config,
   createRuntime:async()=>runtime,createRouterNative:()=>({}),registerConsole(){},registerManagement(){},createMemory:()=>({}),createBiliService:()=>({listTools:()=>[]}),createContentRounds:()=>({}),createNativeDesktopSource:()=>({close(){}}),liveConversationContext:()=>({revision:1,text:'recent experiences'}),console};
  vm.createContext(context);vm.runInContext(source,context);
  await vm.runInContext('apply',context)({tools:{register:(v)=>{tools.set(v.name,v);},guard(){}},effect(){},on:(n?: any,fn?: any)=>{hooks.set(n,fn);},sessionController:{}});
@@ -42,10 +44,10 @@ test('context tools resolve trusted active source and forward only their read pa
 });
 test('prompt keeps recent context and appends only compact task cards for ordinary sources',async()=>{
  const {hooks,runtime,calls}=await hostFixture(),assemble=hooks.get('system-prompt/assemble'),ctx={agent:{session:{id:'session'}}};
- const result=await assemble({},ctx);assert.equal(result.contexts[0].text,'recent experiences');
+ const result=await assemble({},ctx);assert.equal(result.contexts.find(c=>c.name==='chopsticks-live').text,'recent experiences');
  assert.match(result.contexts.find((c)=>c.name==='chopsticks-tasks')?.text||'',/task/);
- runtime.contextService.overview=async()=>({tasks:[]});const empty=await assemble(result,ctx);assert.equal(empty.contexts.length,1);
+ runtime.contextService.overview=async()=>({tasks:[]});const empty=await assemble(result,ctx);assert.deepEqual(Array.from(empty.contexts,(c:any)=>c.name).sort(),['chopsticks-live','chopsticks-safety']);
  runtime.contextCaller=()=>{throw Error('source event required');};
- const ambiguous=await assemble({},ctx);assert.equal(ambiguous.contexts.length,1);
- runtime.caller=(()=>({role:'diary',channel:'diary:public'}) as any);const before=calls.length;const diary=await assemble({},ctx);assert.equal(diary.contexts,undefined);assert.equal(calls.length,before);
+ const ambiguous=await assemble({},ctx);assert.deepEqual(Array.from(ambiguous.contexts,(c:any)=>c.name).sort(),['chopsticks-live','chopsticks-safety']);
+ runtime.caller=(()=>({role:'diary',channel:'diary:public'}) as any);const before=calls.length;const diary=await assemble({},ctx);assert.deepEqual(Array.from(diary.contexts,(c:any)=>c.name),['chopsticks-safety']);assert.equal(calls.length,before);
 });
