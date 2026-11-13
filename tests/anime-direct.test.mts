@@ -49,3 +49,13 @@ test('source account reply layout is used for a twitter candidate',async()=>{
  const text=sent[0].text;
  assert.match(text,/🎯 \*\*鱼鱼找鸡结果\*\*/);assert.match(text,/🌐 平台：Twitter/);assert.match(text,/👤 名字：SuSu/);assert.match(text,/🆔 账号：@susu · https:\/\/x\.com\/susu/);
 });
+test('the bare command searches the default engines without IQDB, which stays selectable by name',async()=>{
+ const bare={...event,meta:{messageId:'12',segments:[{type:'reply',data:{id:'9'}},{type:'text',data:{text:'/鱼鱼找鸡'}}]}};
+ const first=fixture();assert.equal(first.cmds.accept(bare),true);await first.cmds.drain();
+ assert.deepEqual(first.calls[0].engines,['saucenao','tracemoe','lens']);
+ const noLens=fixture({lens:{enabled:false}});assert.equal(noLens.cmds.accept(bare),true);await noLens.cmds.drain();
+ assert.deepEqual(noLens.calls[0].engines,['saucenao','tracemoe']);
+ const named=fixture();const iqdbEvent={...event,meta:{messageId:'12',segments:[{type:'reply',data:{id:'9'}},{type:'text',data:{text:'/鱼鱼找鸡 iqdb'}}]}};
+ assert.equal(named.cmds.accept(iqdbEvent),true);await named.cmds.drain();
+ assert.deepEqual(named.calls[0].engines,['iqdb']);assert.equal(named.reads.length,1);
+});

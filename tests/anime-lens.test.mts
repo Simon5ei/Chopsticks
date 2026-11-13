@@ -1,8 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-let mapLensRows, lensFailureCode;
-try { ({ mapLensRows, lensFailureCode } = await import('../src/image-source/lens.mjs')); } catch {}
+let mapLensRows, lensFailureCode, raced;
+try { ({ mapLensRows, lensFailureCode, raced } = await import('../src/image-source/lens.mjs') as any); } catch {}
+
+// Regression (2026-11-13): after a Lens deadline or cancellation the next CDP
+// call was still dispatched, its promise was dropped, and its later rejection
+// (CDP error or the 25 s command timer) terminated the whole host process.
+test('a CDP call issued after cancellation never leaves an unhandled rejection', async () => {
+  assert.equal(typeof raced, 'function', 'lens must expose its cancellation race helper');
+  const unhandled = [];
+  const record = (error?: any) => { unhandled.push(error); };
+  process.on('unhandledRejection', record);
+  try {
+    const controller = new AbortController();
+    controller.abort(Object.assign(new Error('TIMEOUT'), { code: 'TIMEOUT' }));
+    let failLater;
+    const command = new Promise<any | void>((_?: any, reject?: any) => { failLater = reject; });
+    await assert.rejects(raced(command, controller.signal), { code: 'TIMEOUT' });
+    failLater(Object.assign(new Error('TIMEOUT'), { code: 'TIMEOUT' }));
+    await new Promise<any | void>((resolve) => { setTimeout(resolve, 20); });
+  } finally {
+    process.off('unhandledRejection', record);
+  }
+  assert.deepEqual(unhandled, []);
+});
+
+test('the cancellation race still settles with the command result or a later abort', async () => {
+  const live = new AbortController();
+  assert.equal(await raced(Promise.resolve('value'), live.signal), 'value');
+  await assert.rejects(raced(Promise.reject(Object.assign(new Error('REQUEST_FAILED'), { code: 'REQUEST_FAILED' })), live.signal), { code: 'REQUEST_FAILED' });
+  const pending = raced(new Promise<any | void>(() => {}), live.signal);
+  live.abort(Object.assign(new Error('TIMEOUT'), { code: 'TIMEOUT' }));
+  await assert.rejects(pending, { code: 'TIMEOUT' });
+});
 
 test('lens module exposes bounded row mapping and stable failure codes', () => {
   assert.equal(typeof mapLensRows, 'function', 'lens row mapping must be implemented');

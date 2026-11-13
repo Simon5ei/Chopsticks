@@ -1,4 +1,4 @@
-import {searchAnimeImage,closeImageSource} from '../image-source/client.mjs';
+import {searchAnimeImage,closeImageSource,DEFAULT_ENGINES} from '../image-source/client.mjs';
 import {extractAccounts,formatReply} from '../image-source/accounts.mjs';
 
 const allEngines = ['saucenao','tracemoe','iqdb','lens'];
@@ -36,9 +36,11 @@ export function createAnimeCommands({state,adapter,search=searchAnimeImage,lens}
   const pending = new Set<any>();
   const controller = new AbortController();
   const lensEnabled = lens?.enabled !== false;
-  const engines = lensEnabled ? allEngines : allEngines.filter((engine)=>engine!=='lens');
-  const accepted = new Set<any>(engines);
-  const usage = usageFor(engines);
+  const usable = (list: readonly string[]) => lensEnabled ? [...list] : list.filter((engine)=>engine!=='lens');
+  // Every engine can be named explicitly; the bare command runs the default set.
+  const accepted = new Set<any>(usable(allEngines));
+  const engines = usable(DEFAULT_ENGINES);
+  const usage = usageFor([...accepted]);
   let busy = false;
   async function execute(event?: any,arg?: any,key?: any) {
     const signal = AbortSignal.any([controller.signal,AbortSignal.timeout(60000)]);

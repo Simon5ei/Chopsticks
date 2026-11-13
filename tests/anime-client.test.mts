@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-let searchAnimeImage;
-try { ({ searchAnimeImage } = await import('../src/image-source/client.mjs')); } catch {}
+let searchAnimeImage, DEFAULT_ENGINES;
+try { ({ searchAnimeImage, DEFAULT_ENGINES } = await import('../src/image-source/client.mjs') as any); } catch {}
 const png = Uint8Array.from([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82]);
 const sauce = (url: string = 'https://www.pixiv.net/artworks/123', score: string = '92', title: string = '作品') =>
   `<div class="result"><div class="resultsimilarityinfo">${score}%</div><div class="resulttitle"><strong>${title}</strong></div><a href="${url}">作品</a></div>`;
@@ -84,12 +84,80 @@ test('a failing lens browser search does not hide other engines or leak its mess
   assert.doesNotMatch(JSON.stringify(r), /private|GOOGLE_CAPTCHA https/);
 });
 
-test('the default engine set includes lens after the three illustration engines', async () => {
+// Regression (2026-11-13): IQDB timed out on every recorded run from the server,
+// so each default search waited out its full deadline. It stays selectable by
+// name but is no longer part of the default set.
+test('the default engine set is saucenao, trace.moe and lens; IQDB runs only when named', async () => {
+  const seen = [];
   const r = await searchAnimeImage(png, 'image/png', {
-    fetchImpl: async (url?: any) => url.includes('trace.moe') ? response(trace(), 'application/json') : response(sauce()),
+    fetchImpl: async (url?: any) => { seen.push(url); return url.includes('trace.moe') ? response(trace(), 'application/json') : response(sauce()); },
     lensSearch: async () => [],
   });
-  assert.deepEqual(r.engines.map((e?: any) => e.engine), ['saucenao','tracemoe','iqdb','lens']);
+  assert.deepEqual(r.engines.map((e?: any) => e.engine), ['saucenao','tracemoe','lens']);
+  assert.deepEqual(DEFAULT_ENGINES, ['saucenao','tracemoe','lens']);
+  assert.equal(seen.some((url?: any) => url.includes('iqdb')), false);
+  const named = await call(async () => response(iqdb()), { engines: ['iqdb'] });
+  assert.deepEqual(named.engines.map((e?: any) => [e.engine, e.status, e.count]), [['iqdb','ok',1]]);
+});
+
+// Regression (2026-11-13): a 4.9 MB image timed out on every engine because the
+// original bytes were uploaded unchanged; large images are reduced first.
+const bigPng = () => { const bytes = new Uint8Array(1024 * 1024 + 1); bytes.set(png); return bytes; };
+const smallJpeg = Uint8Array.from([255,216,255,224,0,16,74,70,73,70,0,1,1,0,0,1]);
+const uploads = async (options: Record<string, any> = {}, bytes: any = bigPng()) => {
+  const sent = [];
+  const result = await searchAnimeImage(bytes, 'image/png', {
+    engines: ['saucenao','tracemoe','lens'],
+    fetchImpl: async (url?: any, init?: any) => {
+      const file = init.body.get(url.includes('trace.moe') ? 'image' : 'file');
+      sent.push({ engine: url.includes('trace.moe') ? 'tracemoe' : 'saucenao', size: file.size, type: file.type, name: file.name });
+      return url.includes('trace.moe') ? response(trace(), 'application/json') : response(sauce());
+    },
+    lensSearch: async (lensBytes?: any, mime?: any) => { sent.push({ engine: 'lens', size: lensBytes.length, type: mime }); return []; },
+    ...options,
+  });
+  return { sent, result };
+};
+
+test('an image over 1 MiB is reduced once and every engine receives the reduced JPEG', async () => {
+  const calls = [];
+  const { sent, result } = await uploads({ compress: async (bytes?: any, mime?: any, options?: any) => {
+    calls.push({ size: bytes.length, mime, aborted: options.signal.aborted });
+    return { bytes: smallJpeg, mimeType: 'image/jpeg' };
+  } });
+  assert.deepEqual(calls, [{ size: 1024 * 1024 + 1, mime: 'image/png', aborted: false }]);
+  assert.equal(sent.length, 3);
+  assert.equal(sent.every((s?: any) => s.size === smallJpeg.length && s.type === 'image/jpeg'), true);
+  assert.equal(sent.filter((s?: any) => s.name).every((s?: any) => s.name === 'image.jpg'), true);
+  assert.deepEqual(result.engines.map((e?: any) => e.status), ['ok','ok','ok']);
+});
+
+test('an image of at most 1 MiB is uploaded unchanged without invoking the reducer', async () => {
+  const exact = new Uint8Array(1024 * 1024); exact.set(png);
+  const { sent } = await uploads({ compress: async () => assert.fail('must not reduce a small image') }, exact);
+  assert.equal(sent.every((s?: any) => s.size === 1024 * 1024 && s.type === 'image/png'), true);
+});
+
+test('a reducer that fails or returns an unusable result falls back to the original image', async () => {
+  const unusable = [
+    async () => { throw new Error('ffmpeg missing https://private.invalid'); },
+    async () => null,
+    async () => ({ bytes: new Uint8Array(16), mimeType: 'image/jpeg' }),
+    async () => ({ bytes: smallJpeg, mimeType: 'image/png' }),
+    async () => { const bytes = new Uint8Array(1024 * 1024 + 1); bytes.set(smallJpeg); return { bytes, mimeType: 'image/jpeg' }; },
+  ];
+  for (const compress of unusable) {
+    const { sent, result } = await uploads({ compress });
+    assert.equal(sent.length, 3);
+    assert.equal(sent.every((s?: any) => s.size === 1024 * 1024 + 1 && s.type === 'image/png'), true);
+    assert.doesNotMatch(JSON.stringify(result), /private|ffmpeg/);
+  }
+});
+
+test('cancellation during reduction aborts the search before any upload', async () => {
+  const controller = new AbortController();
+  const pending = uploads({ signal: controller.signal, compress: async () => { controller.abort(); return null; }, fetchImpl: () => assert.fail('must not upload') });
+  await assert.rejects(pending, { name: 'AbortError' });
 });
 
 test('rejects invalid image signatures, mismatched MIME, and excessive bytes before upload', async () => {

@@ -1,5 +1,6 @@
 import {parseSaucenao, parseIqdb, parseTracemoe} from './parsers.mjs';
 import {searchLens, closeLensBrowser, lensFailureCode} from './lens.mjs';
+import {compressForUpload} from './compress.mjs';
 
 const ENDPOINTS = Object.freeze({
   saucenao: 'https://saucenao.com/search.php',
@@ -7,7 +8,12 @@ const ENDPOINTS = Object.freeze({
   iqdb: 'https://iqdb.org/',
 });
 const ENGINES = Object.freeze(['saucenao','tracemoe','iqdb','lens']);
+// IQDB timed out on every recorded run from the deployment host, which made each
+// default search wait out its full deadline. It stays selectable by name.
+export const DEFAULT_ENGINES = Object.freeze(['saucenao','tracemoe','lens']);
 const MAX_IMAGE = 8 * 1024 * 1024;
+// Larger originals are reduced before upload; see compress.mts.
+const REDUCE_OVER = 1024 * 1024;
 const MAX_RESPONSE = 2 * 1024 * 1024;
 const abortError = () => new DOMException('Image search cancelled', 'AbortError');
 class Failure extends Error {
@@ -127,19 +133,36 @@ async function oneEngine(engine: any, bytes: any, mimeType: any, fetchImpl: any,
   }
 }
 
+// Reduce a large original once for all engines. Any failure, or a result that is
+// not a smaller valid JPEG, keeps the original: reduction never fails a search.
+async function reduceForUpload(bytes: any, mimeType: any, compress: any, signal: any) {
+  try {
+    const reduced = await compress(bytes, mimeType, {signal});
+    if (reduced?.mimeType === 'image/jpeg' && reduced.bytes instanceof Uint8Array && reduced.bytes.length < bytes.length) {
+      validateImage(reduced.bytes, reduced.mimeType);
+      return {bytes: reduced.bytes, mimeType: reduced.mimeType};
+    }
+  } catch {}
+  return {bytes, mimeType};
+}
+
 /** Upload an explicitly selected illustration/anime image to the selected fixed engines. */
-export async function searchAnimeImage(bytes?: any, mimeType?: any, {engines=['saucenao','tracemoe','iqdb','lens'], signal, fetchImpl=globalThis.fetch, lensSearch=searchLens, lens={}}: { engines?: any[]; signal?: any; fetchImpl?: any; lensSearch?: any; lens?: Record<string, any>; [key: string]: any } = {}) {
+export async function searchAnimeImage(bytes?: any, mimeType?: any, {engines=[...DEFAULT_ENGINES], signal, fetchImpl=globalThis.fetch, lensSearch=searchLens, lens={}, compress=compressForUpload}: { engines?: any[]; signal?: any; fetchImpl?: any; lensSearch?: any; lens?: Record<string, any>; compress?: any; [key: string]: any } = {}) {
   validateImage(bytes,mimeType);
   if (!Array.isArray(engines) || !engines.length || engines.length > 4 || new Set<any>(engines).size !== engines.length || engines.some((engine) => typeof engine !== 'string' || !ENGINES.includes(engine))) throw new TypeError('Invalid anime engine selection');
   if (typeof fetchImpl !== 'function') throw new TypeError('Invalid fetch implementation');
   if (typeof lensSearch !== 'function') throw new TypeError('Invalid lens search implementation');
+  if (typeof compress !== 'function') throw new TypeError('Invalid image reducer implementation');
   if (signal?.aborted) throw abortError();
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort',abort,{once:true});
   const timer = setTimeout(abort,45_000);
   try {
-    const results = await Promise.all(engines.map((engine) => oneEngine(engine,bytes,mimeType,fetchImpl,controller.signal,signal,{lensSearch,lens})));
+    // Small images start every engine synchronously, exactly as before.
+    const upload = bytes.length > REDUCE_OVER ? await reduceForUpload(bytes,mimeType,compress,controller.signal) : {bytes,mimeType};
+    if (signal?.aborted) throw abortError();
+    const results = await Promise.all(engines.map((engine) => oneEngine(engine,upload.bytes,upload.mimeType,fetchImpl,controller.signal,signal,{lensSearch,lens})));
     if (signal?.aborted) throw abortError();
     const matches = [];
     const seen = new Set<any>();

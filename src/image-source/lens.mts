@@ -296,8 +296,18 @@ async function ensureBrowser({exe, profileDir, proxy, doh}: { exe?: any; profile
 }
 
 // ── CDP helpers ──────────────────────────────────────────────────────────────
-function raced(promise?: any, signal?: any) {
-  if (signal.aborted) return Promise.reject(signal.reason ?? abortError());
+/**
+ * Settle with the CDP command or the cancellation, whichever comes first.
+ * The command has already been dispatched when this runs, so its promise must
+ * always keep a handler: a call made after cancellation used to drop it, and
+ * its later rejection (CDP error or the 25 s command timer) ended the host
+ * process as an unhandled rejection.
+ */
+export function raced(promise?: any, signal?: any) {
+  if (signal.aborted) {
+    Promise.resolve(promise).catch(() => {});
+    return Promise.reject(signal.reason ?? abortError());
+  }
   return new Promise<any | void>((resolve?: any, reject?: any) => {
     const onAbort = () => reject(signal.reason ?? abortError());
     signal.addEventListener('abort', onAbort, {once: true});
