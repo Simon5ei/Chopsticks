@@ -5,6 +5,7 @@ import {Server} from '@modelcontextprotocol/sdk/server/index.js';
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
 import {ListToolsRequestSchema,CallToolRequestSchema} from '@modelcontextprotocol/sdk/types.js';
 import {z} from 'zod';
+import {observationMedia} from './observation-media.mjs';
 import {requestPlatform} from './bridge.mjs';
 
 const platforms=new Set<any>(['qq','bilibili','qzone','heybox','douyin']);
@@ -19,7 +20,14 @@ export function createPlatformMcp({platform,socketPath}: { platform?: any; socke
  const server=new Server({name:`chopsticks-${platform}`,version:'0.1.0'},{capabilities:{tools:{}}});
  server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:Object.entries(schemas).map(([operation,schema])=>({name:`${platform}_${operation}`,description:`Platform ${operation}`,inputSchema:z.toJSONSchema(schema)}))}));
  server.setRequestHandler(CallToolRequestSchema,async (req?: any,extra?: any)=>{
-  try{const operation=Object.keys(schemas).find((op)=>req.params.name===`${platform}_${op}`);if(!operation)throw Error();const args=schemas[operation].parse(req.params.arguments||{});const result=await requestPlatform({socketPath,platform,operation,args,signal:extra.signal});return {content:[{type:'text',text:JSON.stringify(result)}]};}catch{return {isError:true,content:[{type:'text',text:'Platform operation failed or was refused.'}]};}
+  try{const operation=Object.keys(schemas).find((op)=>req.params.name===`${platform}_${op}`);if(!operation)throw Error();const args=schemas[operation].parse(req.params.arguments||{});const result=await requestPlatform({socketPath,platform,operation,args,signal:extra.signal});if(platform==='douyin'&&operation==='read'&&result?.media){
+    const {media,...rest}=result;
+    const sample=observationMedia(media,rest.items?.[0]?.id);
+    if(sample)return {content:[{type:'text',text:JSON.stringify({...rest,mediaEvidence:{kind:sample.kind,seconds:sample.seconds}})},
+      {type:'image',mimeType:'image/jpeg',data:sample.data}]};
+    return {content:[{type:'text',text:JSON.stringify(rest)}]};
+   }
+   return {content:[{type:'text',text:JSON.stringify(result)}]};}catch{return {isError:true,content:[{type:'text',text:'Platform operation failed or was refused.'}]};}
  });return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{const i=process.argv.indexOf('--platform');const platform=i>=0?process.argv[i+1]:undefined;const socketPath=await platformSocketPath();await createPlatformMcp({platform,socketPath}).connect(new StdioServerTransport());}catch{process.stderr.write('Platform MCP could not start.\n');process.exitCode=1;}}

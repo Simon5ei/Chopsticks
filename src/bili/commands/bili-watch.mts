@@ -28,6 +28,7 @@ if (!bvid) { console.error('用法: node bili-watch.mjs <BV号> [列x行] [outDi
 const [cols, rows] = grid.split('x').map(Number)
 if (!cols || !rows) { console.error('格子格式应是 3x3 这样'); process.exit(2) }
 const N = cols * rows
+const observation = process.argv.includes('--observation')
 
 const cred = JSON.parse(fs.readFileSync(accountBili('credentials.json'), 'utf8'))
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -35,13 +36,18 @@ const H = { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: `SES
 
 const view = await (await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers: H })).json()
 if (view.code !== 0) { console.error(`view 失败 code=${view.code} ${view.message}`); process.exit(3) }
+if (observation && view.data?.bvid !== bvid) { console.error('视频标识未通过核验'); process.exit(3) }
 const { cid, title, duration, owner } = { ...view.data, owner: view.data.owner?.name }
 console.log(`标题: ${title}`)
 console.log(`UP: ${owner}   时长: ${duration}s   cid=${cid}`)
 
+if (observation && (!Number.isFinite(duration) || duration <= 0 || duration > 180)) {
+  console.error('视频时长超出本轮抽样预算'); process.exit(4)
+}
+
 // 画质实测（2026-10-14）：html5 + qn=32 会被压到 360p（返回 quality=16，界面小字全糊）；
 // 改 platform=pc + qn=80 可拿到 720p（返回 quality=64），依旧是普通 mp4 直链，不必碰 dash。
-const p = await (await fetch(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnval=1&platform=pc&high_quality=1`, { headers: H })).json()
+const p = await (await fetch(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=${observation ? 16 : 80}&fnval=1&platform=pc&high_quality=1`, { headers: H })).json()
 const url = p.data?.durl?.[0]?.url
 if (!url) { console.error(`没拿到直链（code=${p.code}）——有些视频要登录或只有 dash 流`); process.exit(4) }
 const QN = { 16: '360P', 32: '480P', 64: '720P', 80: '1080P' }
@@ -107,12 +113,13 @@ const tmp = path.join(outDir, `.frames-${stamp}`)
 fs.mkdirSync(tmp, { recursive: true })
 try {
   times.forEach((t?: any, i?: any) => {
-    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-ss', t.toFixed(2), '-i', mp4,
+    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-ss', t.toFixed(2), ...(observation?['-threads','1','-filter_threads','1']:[]), '-i', mp4,
       '-frames:v', '1', path.join(tmp, `f${String(i).padStart(2, '0')}.jpg`)], { stdio: 'inherit' })
   })
   execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
     `scale=480:-1,tile=${cols}x${rows}`, '-frames:v', '1', sheet], { stdio: 'inherit' })
   if (!fs.existsSync(sheet)) throw new Error('九宫格没生成')
+  if (observation) fs.writeFileSync(path.join(outDir,'observation-frames.json'),JSON.stringify({bvid,seconds:times}));
   console.log(`\nSHEET: ${sheet}`)
 } catch (e) {
   console.error('ffmpeg 抽帧失败：' + e.message); process.exit(6)
@@ -122,7 +129,7 @@ try {
 // 依据（2026-10-14 实测）：这类"讲解型"视频字幕就是全部信息量，全画幅九宫格会把字幕压糊；
 // 同样预算下只留字幕带，9 条字幕能全部读清。用的是同一批帧。
 const subs = path.join(outDir, `${bvid}-${stamp}-subs.jpg`)
-try {
+if (!observation) try {
   execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
     `crop=iw:ih*0.17:0:ih*0.83,scale=1280:-1,tile=1x${N}`, '-frames:v', '1', subs], { stdio: 'inherit' })
   if (fs.existsSync(subs)) console.log(`SUBS:  ${subs}\n（同一批帧的底部字幕带，竖排 ${N} 条）`)

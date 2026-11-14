@@ -13,7 +13,7 @@ export function apply(ctx?: any,config: Record<string, any>={}){
  const platform=mode==='bili'||mode==='bili-dm'?'bilibili':['qq','qzone','heybox','douyin'].includes(mode)?mode:null;
  if(platform)for(const action of ['status','read','write'])allowed.add(`mcp__${platform}__${platform}_${action}`);
  if(mode==='bili-dm')for(const tool of ['bili_video','bili_subtitles'])allowed.add(`mcp__bilibili__${tool}`);
- if(['bili','qzone','heybox','douyin'].includes(mode))allowed.add('chopsticks_surf_next');
+ if(['bili','qzone','heybox','douyin'].includes(mode))for(const tool of ['chopsticks_surf_next','chopsticks_content_reflect'])allowed.add(tool);
  if(['qq','bili','qzone','heybox','douyin'].includes(mode))for(const tool of desktop)allowed.add(tool);
  let dispose,signature,closed=false,pending=false;
  const refresh=()=>{if(closed)return;try{const known=ctx.tools.view(undefined).visible;const allow=[...allowed].filter((n)=>known.has(n)),next=allow.join('|');if(next===signature)return;signature=next;dispose?.();dispose=ctx.tools.restrict({allow});}catch(error){if(error?.code!=='INACTIVE_EFFECT')throw error;closed=true;}};

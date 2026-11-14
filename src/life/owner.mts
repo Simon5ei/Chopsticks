@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {observationMedia} from './observation-media.mjs';
 import {publishInput} from './publish-input.mjs';
 import {operatorDmBinding} from './operator-dm.mjs';
 import {createLivePlatformTests} from './live-platforms.mjs';
@@ -20,7 +21,7 @@ const bounded=(x?: any,n: number=4000)=>redact(String(x??'')).slice(0,n);
 const fail=()=>new Error('Platform operation failed or was refused');
 const dateParts=(ms)=>Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(ms).map((x)=>[x.type,x.value]));
 const cleanItem=(x)=>({id:bounded(x.id,512),...(x.url?{url:bounded(x.url,1000)}:{}),...(x.title?{title:bounded(x.title,500)}:{}),text:bounded(x.text,6000),kind:['video','post','message','comment'].includes(x.kind)?x.kind:'post',visibility:x.visibility,...(x.actorId?{actorId:bounded(x.actorId,256)}:{}),...(Number.isFinite(x.at)?{at:x.at}:{}),...Object.fromEntries(['targetId','parentId','rootId','sequence'].filter((k)=>typeof x[k]==='string'&&x[k].length<=256).map((k)=>[k,x[k]])),context:platformContext(x),...(typeof x.fromSelf==='boolean'?{fromSelf:x.fromSelf}:{})});
-export function createLifeOwner({config,state,store,socialPolicy,authorize,onEvent,now=Date.now,platforms={},validationPlatforms=[]}: { config?: any; state?: any; store?: any; socialPolicy?: any; authorize?: any; onEvent?: any; now?: any; platforms?: Record<string, any>; validationPlatforms?: any[]; [key: string]: any }){
+export function createLifeOwner({config,state,store,socialPolicy,authorize,onEvent,now=Date.now,platforms={},validationPlatforms=[],contentObservations}: { config?: any; state?: any; store?: any; socialPolicy?: any; authorize?: any; onEvent?: any; now?: any; platforms?: Record<string, any>; validationPlatforms?: any[]; contentObservations?: any; [key: string]: any }){
  if(!config?.stateDir||!state||!store||typeof authorize!=='function')throw fail();
  const validationWritePlatforms=new Set<any>(Array.isArray(validationPlatforms)?validationPlatforms.filter((name)=>Object.hasOwn(platforms,name)):[]);
  const owners={...platforms},root=path.join(config.stateDir,'life');fs.mkdirSync(root,{recursive:true,mode:0o700});if(process.platform!=='win32')fs.chmodSync(root,0o700);
@@ -49,17 +50,63 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
    binding=await authorize(args.ticket,{platform,operation,...operation==='write'?{targetId:args.targetId}:{}});
   }
   ensureActive();const scope=authorizedScope(binding,platform);
+  if(binding.readOnly&&operation!=='read')throw fail();
   if(operation==='read'){
    if(!['feed','detail','comments','search','inbox','notifications'].includes(args.action)||!adapter.capabilities?.[args.action])throw fail();
    if(args.action==='notifications'&&scope!=='public')throw fail();
    if(args.action==='inbox'&&scope!==`private:${platform==='bilibili'?'bili':platform}`)throw fail();
    if(['detail','comments'].includes(args.action))args=readTarget(platform,args,binding);
-   const limit=Math.min(20,Math.max(1,Number.isInteger(args.limit)?args.limit:10));
-   const result=await Promise.resolve().then(()=>adapter.read({action:args.action,limit,...Object.fromEntries(['id','url','cursor','query'].filter((k)=>typeof args[k]==='string'&&args[k].length<=1000).map((k)=>[k,args[k]])),context:binding,signal})).catch((e)=>{throw operationHealth(platform,args.action,e,true);});
+   const observing=binding.readOnly&&contentObservations?.active({...binding,consumed:true});
+   if(binding.readOnly&&(!observing||!['feed','search','detail','comments'].includes(args.action)))throw fail();
+   const actor={...binding,consumed:true},detail=args.action==='detail',comments=args.action==='comments';
+   const attempt=detail?'body':comments?'comments':undefined;
+   if(observing&&!contentObservations.reserve(actor,attempt?args.id:observing.itemId,attempt??'discovery'))return {items:[],truncated:false,warnings:['BROWSE_ALREADY_ATTEMPTED']};
+   const limit=Math.min(observing?(detail?1:comments?4:5):20,Math.max(1,Number.isInteger(args.limit)?args.limit:10));
+   const result=await Promise.resolve().then(()=>adapter.read({action:args.action,limit,...Object.fromEntries(['id','url','cursor','query'].filter((k)=>typeof args[k]==='string'&&args[k].length<=1000).map((k)=>[k,args[k]])),context:binding,signal,...observing&&platform==='douyin'?{observeMedia:true}:{}})).catch((e)=>{
+    if(observing&&attempt&&!signal.aborted)contentObservations.observe(actor,args.id,attempt,null);
+    throw operationHealth(platform,args.action,e,true);
+   });
    const codes=(result?.warnings||[]).filter((x)=>safeCode(x)),blocked=codes.find((x)=>/verification_required|login_required/i.test(x));state.put?.('health',`life-operation:${platform}:${args.action}`,{state:blocked?.toLowerCase().includes('verification')?'verification_required':blocked?'login_required':result?.truncated||result?.warnings?.length?'partial':'ready',at:now(),warningCount:result?.warnings?.length||0,...codes[0]?{code:codes[0]}:{}});
    if(!Array.isArray(result?.items))throw fail();const items=result.items.filter((i)=>i&&typeof i.id==='string'&&i.id&&(args.action!=='detail'||i.id===args.id)&&allowed(i,scope,platform)).slice(0,limit).map(cleanItem);
    const output: any={items,...typeof result.cursor==='string'?{cursor:bounded(result.cursor,1000)}:{},truncated:!!result.truncated||result.items.length>limit,warnings:Array.isArray(result.warnings)?result.warnings.slice(0,10).map((w)=>bounded(w,500)):[]};
    if(result.items.length!==items.length){output.truncated=true;output.warnings.push('Items omitted due to scope or limit');}
+   if(observing&&attempt){
+    ensureActive();
+    await authorize(args.ticket,{platform,operation:'read'});
+    ensureActive();
+    if(!contentObservations.active(actor))throw fail();
+    const item=items[0];
+    const source=detail&&item?result.items.find(raw=>raw.id===item.id&&allowed(raw,scope,platform)):undefined;
+    const kind=detail?source?.observationKind:'comments';
+    const text=detail?item?.text:items.map(comment=>comment.text).filter(Boolean).join('\n');
+    const evidence=['body','body_excerpt','description','metadata','comments'].includes(kind)&&text?.trim()?{kind,text}:null;
+    if(evidence&&kind==='body'){
+     const id=`life:read:${digest([platform,scope,item.id,item.text,item.title||''])}`;
+     if(!store.get?.(id))await emit({id,kind:'task.result',channel:binding.channel,actorId:'fish',
+      text:JSON.stringify(item),meta:{experienced:true,route:false,passive:true,sourceEventId:binding.eventId,platform,itemId:item.id,evidenceKind:kind}});
+     output.sourceEventId=id;
+     Object.assign(evidence,{sourceEventId:id});
+    }
+    contentObservations.observe(actor,args.id,attempt,evidence);
+    output.observationKind=evidence?.kind??null;
+    if(platform==='douyin'&&detail&&item){
+     const media=observationMedia(source?.media,args.id);
+     if(media){
+      const id=`life:media:${digest([platform,scope,item.id,media.kind,media.seconds,media.data])}`;
+      const text=media.kind==='frames'?`视频画面采样 ${media.seconds} 秒`:'已读取图文中的一张图片';
+      if(!store.get?.(id))await emit({id,kind:'task.result',channel:binding.channel,actorId:'fish',text,
+       meta:{experienced:true,route:false,passive:true,sourceEventId:binding.eventId,platform,itemId:item.id,evidenceKind:media.kind}});
+      contentObservations.observe(actor,args.id,media.kind,{kind:media.kind,text,sourceEventId:id});
+      output.media=media;
+     }
+     if(item.kind==='video'){
+      contentObservations.observe(actor,args.id,'subtitles',null);
+      if(!media||media.kind!=='frames')contentObservations.observe(actor,args.id,'frames',null);
+      output.mediaMissing=media?.kind==='frames'?['subtitles']:['subtitles','frames'];
+     }
+    }
+    return output;
+   }
    if(args.action==='detail'&&items.length){const item=items[0],id=`life:read:${digest([platform,scope,item.id,item.text,item.title||''])}`;if(!store.get?.(id))await emit({id,kind:'task.result',channel:binding.channel,actorId:'fish',text:JSON.stringify(item),meta:{experienced:true,route:false,passive:true,sourceEventId:binding.eventId,platform,itemId:item.id}});output.sourceEventId=id;}
    return output;
   }

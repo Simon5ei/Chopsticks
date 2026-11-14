@@ -39,3 +39,21 @@ test('MCP cancellation reaches the active bridge handler',async (t?: any) =>{
  const c=new AbortController(),pending=client.callTool({name:'qq_status',arguments:{}},undefined,{signal:c.signal});await entered;c.abort();await assert.rejects(pending);
  assert.equal(await Promise.race([aborted.then(()=>true),new Promise<any | void>((r)=>setTimeout(()=>r(false),150))]),true);
 });
+
+test('Douyin MCP sends the verified frame as image content and keeps base64 out of text',async(t)=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'life-mcp-image-'));
+ const socketPath=process.platform==='win32'?String.raw`\\.\pipe\life-${randomUUID()}`:path.join(dir,'life','platform.sock');
+ const config=path.join(dir,'config.json');await fs.writeFile(config,JSON.stringify({stateDir:dir,life:{socketPath}}));
+ const id='1234567890',data=Buffer.from([255,216,255,224,0,16,255,217]).toString('base64');
+ const bridge=createPlatformBridge({socketPath,handle:async()=>({items:[{id,text:'描述'}],media:{itemId:id,kind:'frames',data,seconds:2.5}})});
+ await bridge.start();
+ const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../src/life/mcp.mjs',import.meta.url)),'--platform','douyin'],env:{...process.env,CHOPSTICKS_CONFIG:config},stderr:'pipe'});
+ const client=new Client({name:'fixture',version:'1'});
+ t.after(async()=>{await client.close();await bridge.close();await fs.rm(dir,{recursive:true,force:true});});
+ await client.connect(transport);
+ const result:any=await client.callTool({name:'douyin_read',arguments:{ticket:'opaque',action:'detail',id}});
+ assert.equal(result.isError,undefined);
+ assert.deepEqual(JSON.parse(result.content[0].text).mediaEvidence,{kind:'frames',seconds:2.5});
+ assert.ok(!result.content[0].text.includes(data));
+ assert.deepEqual(result.content[1],{type:'image',mimeType:'image/jpeg',data});
+});

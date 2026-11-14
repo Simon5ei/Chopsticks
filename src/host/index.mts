@@ -8,7 +8,7 @@ import {createRequire} from 'node:module';
 import {createRuntime,readJSON} from './runtime.mjs';
 import {hash} from './state.mjs';
 import {validationAdapter} from './validation.mjs';
-import {createBiliService} from '../bili/mcp/service.mjs';
+import {createBiliService,normalizeBvid} from '../bili/mcp/service.mjs';
 import {createMemory} from './memory.mjs';
 import {createRouterNative} from './router-native.mjs';
 import {checkStyle} from './style-check.mjs';
@@ -19,7 +19,7 @@ import {createContentRounds} from './content-rounds.mjs';
 export const name='chopsticks';
 export const inject=['tools','sessionController','workspaceRegistry','agents','agentPresets'];
 function hostRequire(){for(const file of [process.env.DSH_RUNTIME_PACKAGE,process.argv[1]].filter(Boolean))try{const req=createRequire(fs.realpathSync(file));req.resolve('@deepseek-ai/dsh-tools');return req;}catch{}throw Error('DSH native tools unavailable');}
-export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,feedFactory,onRuntime}: { lifePlatforms?: Record<string, any>; adapterFactory?: any; socialFactory?: any; feedFactory?: any; onRuntime?: any; [key: string]: any }={}){return async function apply(ctx?: any){
+export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,feedFactory,biliServiceFactory,onRuntime}: { lifePlatforms?: Record<string, any>; adapterFactory?: any; socialFactory?: any; feedFactory?: any; biliServiceFactory?: typeof createBiliService; onRuntime?: any; [key: string]: any }={}){return async function apply(ctx?: any){
  const file=process.env.CHOPSTICKS_CONFIG;if(!file)throw Error('CHOPSTICKS_CONFIG must point to an external config');
  const config=readJSON(file);if(!config.stateDir||!config.fishHome)throw Error('Missing external Chopsticks data roots');
  const req=hostRequire(),host=req('@deepseek-ai/dsh-tools'),mcp=req('@deepseek-ai/dsh-mcp-client');
@@ -31,9 +31,9 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  try{
  ctx.effect(()=>()=>{void dispose();});
  registerConsole(ctx,runtime);
- registerManagement(ctx);
+ registerManagement(ctx,runtime.contentObservations);
  const memory=createMemory({fishHome:config.fishHome,state:runtime.state,store:runtime.store,sharePlatformPrivate:runtime.layered});
- const bili=createBiliService({fishHome:config.fishHome,socialPolicy:runtime.socialPolicy});
+ const bili=(biliServiceFactory??createBiliService)({fishHome:config.fishHome,socialPolicy:runtime.socialPolicy});
  const contentRounds=createContentRounds({state:runtime.state,store:runtime.store,onEvent:runtime.ingest,maxQueued:config.life?.maxQueuedRoundsPerDay??24});
  const str=(description?: any,required: boolean=false)=>({type:'string',description,...required?{required:true}:{}});
  const nativeDesktopCharacter=readJSON(path.join(config.fishHome,'characters/current.json')).id;
@@ -46,6 +46,15 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  });
  disposers.push(()=>nativeDesktop.close());
  const who=(exec)=>runtime.caller(exec.agent.session.id);
+ const browseTools=new Set(['chopsticks_surf_next','chopsticks_content_reflect',
+  'mcp__bilibili__bili_video','mcp__bilibili__bili_subtitles','mcp__bilibili__bili_frames',
+  'mcp__bilibili__bili_search','mcp__bilibili__bili_dynamic',
+  ...['heybox','qzone','douyin'].map(platform=>`mcp__${platform}__${platform}_read`)]);
+ disposers.push(ctx.tools.guard(exec=>{
+  const bound=runtime.state.binding(exec.agent?.session?.id);
+  if(bound?.readOnly&&runtime.state.get('platform-job',bound.requestId)?.status==='starting'&&
+     !browseTools.has(exec.name))return '本轮仅允许浏览和保存私有感想';
+ }));
  disposers.push(ctx.tools.guard((exec)=>{if(runtime.layered&&exec.name.startsWith('mcp__cul__')){let caller;try{caller=nativeDesktop.caller(exec.agent.session.id)||who(exec);}catch{return '桌面操作没有活动来源';}if(!runtime.desktopLease.claim(caller))return '桌面正由另一轮活动使用';}}));
  const add=(name?: any,description?: any,parameters?: any,execute?: any)=>disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute})));
  const source=(exec)=>{const c=who(exec);if(c.role==='worker')throw Error('Workers cannot control other tasks');return c;};
@@ -66,6 +75,9 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  add('chopsticks_no_reply','将当前 B站私信标记为无需回复。',{reason:str('不回复的简短理由',true)},(a?: any,e?: any)=>runtime.noReply(e.agent.session.id,a));
  add('chopsticks_style_check','检查待发草稿的套话和AI腔，最多2000字；返回可选修改建议。',{text:str('本轮待发草稿',true)},(a?: any,e?: any)=>checkStyle(who(e),a));
  add('chopsticks_surf_next','将本平台的下一条指定内容加入阅读队列。',{itemId:str('从实际平台结果取得的内容 ID',true)},(a?: any,e?: any)=>{if(!runtime.layered)throw Error('Layered surfing is not enabled');return contentRounds.next({caller:who(e),itemId:a.itemId});});
+ if(runtime.contentObservations)add('chopsticks_content_reflect','仅本轮自动浏览。保存有来源的内容总结、自己的感想、后续兴趣或跳过原因。工具读取记录由宿主提供。',{
+  summary:str('只归纳本轮取得的实质材料，注明字幕或画面覆盖范围'),reaction:str('主观感想'),next:str('想继续的线索'),skip:str('尚未读到实质材料时的跳过理由')
+ },(a,e)=>runtime.contentObservations.reflect(who(e),a));
  add('chopsticks_evolution_read','内部进化会话：读取本轮实际来源及同范围已有报告。',{},(a?: any,e?: any)=>{if(!runtime.evolution)throw Error('Evolution disabled');return runtime.evolution.read(e.agent.session.id,e.signal);});
  add('chopsticks_evolution_report','内部进化会话：保存有规范来源的事实、假设和人际关系，不能对外发布或执行改动。',{scope:str('本轮绑定 scope',true),facts:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}},required:true},hypotheses:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}},relationships:{type:'array',items:{type:'object',additionalProperties:false,properties:{from:{type:'string',required:true},to:{type:'string',required:true},relation:{type:'string',required:true},certainty:{type:'string',enum:['observed','hypothesis'],required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}}},(a?: any,e?: any)=>{if(!runtime.evolution)throw Error('Evolution disabled');return runtime.evolution.report(e.agent.session.id,a,e.signal);});
  add('chopsticks_diary_write','按来源范围保存私密日记，包含正文及可选的感受、疑问和后续想法。',{date:str('北京时间日期 YYYY-MM-DD',true),sourceEventIds:{type:'array',items:{type:'string'},required:true},text:str('日记正文',true),feelings:str('自己的感受'),questions:str('尚未确定的问题'),next:str('以后想继续的事'),revision:{type:'number'}},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.writeDiary(e.agent.session.id,a,e.signal);});
@@ -107,13 +119,34 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
     const admission=await authorizeBiliTool({caller,replyTickets:runtime.replyTickets,contentRounds,name:tool.name,args});
     if(!admission.allowed)return {content:[{type:'text',text:JSON.stringify(admission)}],structuredContent:admission};
    }
-   const invoke=()=>bili.call(tool.name,args,{...caller,signal:exec.signal});
+   const observations=runtime.contentObservations;
+   const active=observations?.active(caller);
+   const attempt={bili_video:'metadata',bili_dynamic:'metadata',bili_subtitles:'subtitles',bili_frames:'frames'}[tool.name];
+   if(active&&tool.name==='bili_search'&&!observations.reserve(caller,active.itemId,'discovery'))
+    return {content:[{type:'text',text:'本轮已查询过候选。'}]};
+   const itemId=active&&attempt?(tool.name==='bili_dynamic'?args.id:normalizeBvid(args.bvid)):undefined;
+   if(itemId&&!observations.reserve(caller,itemId,attempt))return {content:[{type:'text',text:'本轮该材料已尝试或超出预算。'}]};
+   const invoke=()=>bili.call(tool.name,args,{...caller,signal:exec.signal,contentObservation:Boolean(active)});
    const writing=['bili_comment','bili_dynamic_post'].includes(tool.name)&&args.mode==='go';
    if(writing&&config.validation)throw Error('Publishing disabled in validation');
    const result=writing?await runtime.state.send(`bili-send:${hash([caller.sessionId,caller.eventId,tool.name,args])}`,args,async()=>{
     const result=await invoke();const receipt=result.structuredContent?.receipt;if(result.isError||receipt?.status!=='confirmed')throw Object.assign(Error('Bili write outcome unconfirmed: do not retry blindly'),result.structuredContent?.deliveryState==='not_sent'?{deliveryState:'not_sent',code:result.structuredContent.code}:{});
     await runtime.ingest({id:`bili:${receipt.kind}:${receipt.id}`,kind:'message.sent',channel:'bili:public',actorId:'fish',text:args.message||args.text,meta:{messageId:receipt.id,url:receipt.url}});return result;
    }):await invoke();
+   if(active&&attempt){
+    const evidence=result.structuredContent?.observation;
+    if(!exec.signal?.aborted&&observations.active(caller)){
+     let sourceEventId;
+     if(evidence&&['subtitles','frames'].includes(evidence.kind)){
+      const event=runtime.store.append({id:`bili-read:${exec.callId}`,kind:'task.result',channel:caller.channel,
+       actorId:'fish',text:evidence.text.slice(0,6000),meta:{route:false,passive:true,experienced:true,platform:'bili',itemId,evidenceKind:evidence.kind}});
+      sourceEventId=event.id;
+     }
+     observations.observe(caller,itemId,attempt,evidence?{...evidence,sourceEventId}:null);
+     if(sourceEventId)return {...result,structuredContent:{...result.structuredContent,sourceEventId}};
+    }
+    return result;
+   }
    if(!result.isError&&['bili_video','bili_subtitles','bili_frames','bili_comments','bili_dynamic'].includes(tool.name)){const evidence=runtime.store.append({id:`bili-read:${exec.callId}`,kind:'task.result',channel:caller.channel||caller.chatKey,actorId:'fish',text:`我读取了 ${tool.name} ${args.bvid}。可用证据：${result.content.filter((c)=>c.type==='text').map((c)=>c.text).join('\n').slice(0,6000)}`,meta:{route:false,passive:true,experienced:true,platform:'bili',itemId:args.bvid}});return {...result,structuredContent:{...result.structuredContent,sourceEventId:evidence.id}};}
    return result;
   }})));

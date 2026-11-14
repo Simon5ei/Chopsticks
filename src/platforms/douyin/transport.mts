@@ -8,6 +8,7 @@ import {guardedSubmit} from './write-guard.mjs';
 export {guardedSubmit} from './write-guard.mjs';
 import {advancedWrite} from './actions.mjs';
 import {publisherDiagnostics} from './publish-diagnostics.mjs';
+import {sampleVisibleContent} from './observation.mjs';
 import {dmDiagnostics} from './dm-diagnostics.mjs';
 
 export function createBrowserTransport({config,stateDir,chromium: injectedChromium}: { config?: any; stateDir?: any; chromium?: any; [key: string]: any }) {
@@ -113,7 +114,7 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
         return confirmLikeReceipt({status_code:data?.status_code,targetId:target,accountBefore:account,accountAfter,after},{targetId:target,accountId:account});
       } catch {return submitted?uncertain():refused('PRECONDITION_UNAVAILABLE');}
     },
-    async read({action,limit,targetId,query}: { action?: any; limit?: any; targetId?: any; query?: any; [key: string]: any }) {
+    async read({action,limit,targetId,query,observeMedia}: { action?: any; limit?: any; targetId?: any; query?: any; observeMedia?: boolean; [key: string]: any }) {
       if(action==='inbox') {
         const p=await ensure(),accountId=await identity(p),results=[],tasks=[];
         const listener=(r)=>{try{const u=new URL(r.url());if(u.hostname==='imapi.douyin.com'&&['/v1/message/get_message_by_init','/v1/message/get_user_message','/v1/message/get_by_conversation'].includes(u.pathname))tasks.push(r.body().then((b)=>results.push(decodeInbox(b))).catch(()=>results.push({items:[],incomplete:true})));}catch{}};
@@ -132,10 +133,24 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
         return {accountId,items:data?.status_code===0&&Array.isArray(items)?items:[],hasMore:!!data.has_more,incomplete:data?.status_code!==0||!Array.isArray(items)};
       }
       const p=await ensure(); const hits=[]; const tasks=[];
+      const acceptedPaths=action==='feed'?['/aweme/v1/web/tab/feed/','/aweme/v1/web/module/feed/']:
+       action==='detail'?['/aweme/v1/web/aweme/detail/']:
+       action==='comments'?['/aweme/v1/web/comment/list/']:['/aweme/v1/web/search/single/','/aweme/v1/web/general/search/single/'];
       const onResponse=(response)=>{
-        const u=response.url();
-        const relevant=action==='feed' ? /tab\/feed|module\/feed/.test(u) : action==='detail' ? /aweme\/detail\//.test(u) : action==='comments' ? /comment\/list\//.test(u) : /search\/single/.test(u);
-        if(relevant) tasks.push(response.json().then((d)=>hits.push(d)).catch(()=>{}));
+       if(observeMedia!==true){
+        const url=response.url();
+        const relevant=action==='feed'?/tab\/feed|module\/feed/.test(url):action==='detail'?/aweme\/detail\//.test(url):
+         action==='comments'?/comment\/list\//.test(url):/search\/single/.test(url);
+        if(relevant)tasks.push(response.json().then(data=>hits.push(data)).catch(()=>{}));
+        return;
+       }
+       let u:URL;
+       try{u=new URL(response.url());}catch{return;}
+       if(u.protocol!=='https:'||u.hostname!=='www.douyin.com'||u.port||u.username||u.password||
+          !acceptedPaths.includes(u.pathname)||tasks.length>=4)return;
+       if(action==='comments'&&u.searchParams.get('aweme_id')!==targetId)return;
+       const data=boundedObservationResponse(response);
+       tasks.push(data.then(d=>hits.push(d)).catch(()=>{}));
       };
       p.on('response',onResponse);
       try {
@@ -154,13 +169,25 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
         else if(action==='search') {for(const x of d.data || []) {const a=x.aweme_info||x.aweme;if(a)items.push(a);} items.push(...(d.aweme_list||[]));hasMore ||= !!d.has_more;}
         else if(action==='feed') items.push(...(d.aweme_list||[]));
       }
-      return {items:items.slice(0,limit),hasMore:hasMore||items.length>limit,incomplete:hits.length===0||apiError||(action==='detail'&&items.length===0),...(apiError?{code:'PLATFORM_API_ERROR'}:{})};
+      const media=observeMedia===true&&action==='detail'&&items.length===1&&contentVisibility(items[0])==='public'
+       ?await sampleVisibleContent(p,targetId,items[0]):undefined;
+      return {items:items.slice(0,limit),...media?{media}:{},hasMore:hasMore||items.length>limit,incomplete:hits.length===0||apiError||(action==='detail'&&items.length===0),...(apiError?{code:'PLATFORM_API_ERROR'}:{})};
     },
     idleClose:close,cancel:close,close
   };
 }
 
 
+async function boundedObservationResponse(response: any) {
+ const limit=512*1024;
+ const encoding=await response.headerValue('content-encoding');
+ const length=await response.headerValue('content-length');
+ if((encoding&&encoding!=='identity')||!/^\d{1,7}$/.test(length||'')||Number(length)>limit)
+  throw Error('No bounded observation response');
+ const body=await response.body();
+ if(body.length>limit||body.length!==Number(length))throw Error('Observation response limit');
+ return JSON.parse(body.toString('utf8'));
+}
 const stableId = (value) => (typeof value === 'number' && !Number.isSafeInteger(value)) ? '' : (/^\d{6,30}$/.test(String(value ?? '')) ? String(value) : '');
 const uncertain = () => ({confirmed:false,state:'uncertain',code:'UNVERIFIED_RECEIPT'});
 export function contentVisibility(raw?: any) {

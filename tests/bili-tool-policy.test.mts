@@ -11,3 +11,12 @@ test('all legacy Bili writes enforce the same consumed current-target and revoca
  f.state.put('binding','s',f.caller);f.tickets.revokeForRequest('r');await assert.rejects(authorizeBiliTool({...input,name:'bili_dynamic_post',args:{mode:'go'}}),/ticket/i);
 });
 test('legacy comments and dynamic reads also pass one-content-per-turn admission',async()=>{assert.equal(typeof authorizeBiliTool,'function');const f=fixture(),seen=[];const contentRounds={admit:async (args?: any) =>(seen.push(args),{allowed:false,queued:true})};for(const [name,args,id] of [['bili_comments',{bvid:'BV1xx411c7mE'},'BV1xx411c7mE'],['bili_dynamic',{id:'123'},'123']]){const result=await authorizeBiliTool({caller:f.caller,replyTickets:f.tickets,contentRounds,name,args});assert.equal(result.allowed,false);assert.equal(seen.at(-1).itemId,id);}});
+
+test('automatic browsing ticket admits reads but refuses all writes including own targets',()=>{
+ const f=fixture();
+ const ticket=f.tickets.issue({...f.caller,readOnly:true,sourceTargetId:'BV1xx411c7mD',allowedOwnTarget:'own-public'});
+ assert.equal(f.tickets.authorize(ticket,{platform:'bili',operation:'read'}).readOnly,true);
+ for(const targetId of ['BV1xx411c7mD','own-public']){
+  assert.throws(()=>f.tickets.authorize(ticket,{platform:'bili',operation:'write',targetId}),/read.only/i);
+ }
+});

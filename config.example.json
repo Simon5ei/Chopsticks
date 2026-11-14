@@ -60,6 +60,10 @@
     "enabled": false,
     "maxQueuedRoundsPerDay": 24
   },
+  "contentObservations": {
+    "platforms": { "bili": false, "heybox": false, "qzone": false, "douyin": false },
+    "report": "brief"
+  },
   "qzone": {
     "enabled": false
   },

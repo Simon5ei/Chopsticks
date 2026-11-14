@@ -86,8 +86,8 @@ const jget = async (u?: any) => (await fetch(u, { headers: H })).json()
 // WBI（与其它脚本一致）
 const MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
 const keyOf = (u?: any) => u.slice(u.lastIndexOf('/') + 1, u.lastIndexOf('.'))
-const nav = await jget('https://api.bilibili.com/x/web-interface/nav')
-const mixin = MIXIN_TAB.map((i?: any) => (keyOf(nav.data?.wbi_img?.img_url ?? '') + keyOf(nav.data?.wbi_img?.sub_url ?? ''))[i]).join('').slice(0, 32)
+const nav = opt['metadata-only']?null:await jget('https://api.bilibili.com/x/web-interface/nav')
+const mixin = MIXIN_TAB.map((i?: any) => (keyOf(nav?.data?.wbi_img?.img_url ?? '') + keyOf(nav?.data?.wbi_img?.sub_url ?? ''))[i]).join('').slice(0, 32)
 const wbi = (params?: any) => {
   const wts = Math.round(Date.now() / 1000)
   const q = Object.keys({ ...params, wts }).sort()
@@ -101,6 +101,13 @@ fs.mkdirSync(path.join(shots, 'subs'), { recursive: true })
 // ── ① 元信息 ──
 const view = await jget(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`)
 if (view.code !== 0) { console.error(`view 失败 code=${view.code} ${view.message}`); process.exit(3) }
+if (opt['metadata-only']) {
+  if (view.data?.bvid!==bvid) { console.error('视频标识未通过核验'); process.exit(3) }
+  const item=view.data;
+  console.log(JSON.stringify({bvid,title:String(item.title??'').slice(0,500),
+    description:String(item.desc??'').slice(0,2000),duration:item.duration}));
+  process.exit(0)
+}
 const d = view.data, cid = d.cid, aid = d.aid, dur = d.duration
 console.log('══════════ ① 元信息（它自称是什么）══════════')
 console.log(`标题: ${d.title}`)

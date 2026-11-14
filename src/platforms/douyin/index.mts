@@ -9,6 +9,8 @@ export const CAPABILITIES = Object.freeze({feed:true,detail:true,search:true,com
 const id = (value) => (typeof value === 'number' && !Number.isSafeInteger(value)) ? '' : (/^\d{6,30}$/.test(String(value ?? '')) ? String(value) : '');
 const safeText = (value) => typeof value === 'string' ? value.slice(0, 5000) : '';
 
+import {observationMedia} from '../../life/observation-media.mjs';
+
 export function createDouyinPlatform({config = {}, stateDir, now = Date.now, transport, idleMs = 120000, diagnosticsTimeoutMs=25000, userPlatformFactory=createUserPlatform, userLaunchResolver=resolveUserLaunch}: { config?: Record<string, any>; stateDir?: any; now?: any; transport?: any; idleMs?: number; diagnosticsTimeoutMs?: number; userPlatformFactory?: any; userLaunchResolver?: any; [key: string]: any } = {}) {
   if (!stateDir) throw new TypeError('stateDir required');
   if(config?.douyin?.desktopUser && !transport) return userPlatformFactory({launchResolver:()=>userLaunchResolver(config.douyin)});
@@ -74,7 +76,7 @@ export function createDouyinPlatform({config = {}, stateDir, now = Date.now, tra
         return out;
       } catch { return {state:'error'}; }
     },
-    async read({action,limit=10,cursor,id:targetId,url,query,signal}: { action?: any; limit?: number; cursor?: any; id?: any; url?: any; query?: any; signal?: any; [key: string]: any }={}) {
+    async read({action,limit=10,cursor,id:targetId,url,query,signal,observeMedia}: { action?: any; limit?: number; cursor?: any; id?: any; url?: any; query?: any; signal?: any; observeMedia?: boolean; [key: string]: any }={}) {
       if (cursor != null && cursor !== '') return {items:[],truncated:true,warnings:['CURSOR_UNSUPPORTED']};
       if (!['feed','detail','comments','search','inbox','notifications'].includes(action)) return {items:[],truncated:false,warnings:['UNSUPPORTED']};
       const n=Math.max(1,Math.min(50,Number.isFinite(Number(limit))?Math.floor(Number(limit)):10));
@@ -82,7 +84,7 @@ export function createDouyinPlatform({config = {}, stateDir, now = Date.now, tra
       if (['detail','comments'].includes(action) && !target) return {items:[],truncated:false,warnings:['INVALID_TARGET']};
       if (action==='search' && (!safeText(query).trim() || safeText(query).length>200)) return {items:[],truncated:false,warnings:['INVALID_QUERY']};
       try {
-        const result=await run(signal,()=>browser.read({action,limit:n,cursor,targetId:target,query:safeText(query),signal}));
+        const result=await run(signal,()=>browser.read({action,limit:n,cursor,targetId:target,query:safeText(query),signal,...observeMedia===true?{observeMedia:true}:{}}));
         const items=[]; let discarded=false;
         for (const raw of Array.isArray(result?.items)?result.items:[]) {
           if(action==='notifications') {
@@ -107,6 +109,11 @@ export function createDouyinPlatform({config = {}, stateDir, now = Date.now, tra
           if (!itemId) {discarded=true;continue;}
           const kind=action==='comments'?'comment':([68,150,211].includes(Number(raw.aweme_type))?'post':'video');
           const item: any={id:itemId,...(kind!=='comment'?{url:`https://www.douyin.com/${kind==='post'?'note':'video'}/${itemId}`}:{}) ,text:safeText(raw.desc ?? raw.text ?? raw.title),kind,visibility:kind==='comment'?'public':contentVisibility(raw)};
+          if(action==='detail')item.observationKind=typeof (raw.desc??raw.text)==='string'?(kind==='post'?'body':'description'):'metadata';
+          if(observeMedia===true&&action==='detail'&&itemId===target&&item.visibility==='public'){
+           const media=observationMedia(result.media,target);
+           if(media)item.media=media;
+          }
           const actor=id(raw.author?.uid ?? raw.user?.uid); if(actor) item.actorId=actor;
           const secUid=raw.author?.sec_uid ?? raw.user?.sec_uid;if(/^MS4w[A-Za-z0-9_-]{8,200}$/.test(secUid||''))item.context={secUid};
           items.push(item); if(items.length>=n) break;

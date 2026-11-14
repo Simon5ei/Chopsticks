@@ -68,6 +68,10 @@ DSH profile 将本包加入 `dependencies` 和 `dsh.profile.bundles`，由 `pres
 
 Router 工作区保存总体、IM 和内容 Router。QQ 工作区中每个单聊或群聊各有一个会话；各内容平台工作区中，浏览及评论互动共用一个公开会话，每个私聊用户另有一个会话。旧的同平台合并聊天历史完整保留，不复制到新联系人的模型历史。各平台冲浪使用 `surf.<platform>`，每一篇内容在原平台会话推进一轮；下一条可用 `chopsticks_surf_next` 排队，实际阅读后才进入经历。
 
+配置 `contentObservations.platforms` 可以逐个开启 B站（`bili`）、小黑盒（`heybox`）、QQ 空间（`qzone`）和抖音（`douyin`）的只读浏览。工具记录可核验的字幕、画面和正文，鱼用 `chopsticks_content_reflect` 分别保存内容总结、感想和后续兴趣。只有简介、封面、评论或部分正文时，回顾会显示证据的实际范围。抖音画面只取已有浏览器中能和当前公开作品核对的一个样本。
+
+回顾以北京时间按天归档。管理员可在已登录的 DSH 打开 `/api/chopsticks/content-recap?scope=public`。好友范围用 `scope=qzone%3Afriends` 单独查看，可加 `date=YYYY-MM-DD`。配置 `contentObservations.report` 支持 `brief`、`full`、`off`。
+
 开启 `life.enabled` 并在私有 profile 配置平台 MCP 后，`qq`、`bilibili`、`qzone`、`heybox`、`douyin` 各有一个 stdio MCP 身份，通过私有 IPC 复用宿主唯一连接或浏览器 owner。`node life/mcp.mjs --platform <name>` 提供状态、读取和确认写入；登录不出现在角色工具目录。操作员使用 `node life/operator.mjs status <name>` 或 `login <name> start|poll`，凭据与二维码只存外部私有目录。
 
 QQ空间复用现有登录，动态发布保持好友可见。小黑盒、抖音的浏览和互动由各自平台适配器提供，具体操作是否可用须同时核验登录、操作验证状态和平台回执。登录正常不代表每项操作畅通。抖音使用独立持久浏览器 profile，在真实 GNOME 会话中运行为桌面用户；超时后仅在原进程及 profile 占用均结束时恢复，新请求不会重放未确认写入。各项写入都校验目标、账号与真实平台回执。

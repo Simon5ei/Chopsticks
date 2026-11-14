@@ -56,6 +56,9 @@ function wbi(params?: any) {
 
 const view = await jget(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`)
 if (view.code !== 0) { console.error(`view 失败 code=${view.code} ${view.message}`); process.exit(3) }
+if (process.env.CHOPSTICKS_BILI_READ_BUDGET==='text' && view.data?.bvid!==bvid) {
+ console.error('视频标识未通过核验'); process.exit(3)
+}
 const { aid, cid, title, duration } = view.data
 console.log(`标题: ${title}`)
 console.log(`UP: ${view.data.owner.name}   时长: ${duration}s   aid=${aid} cid=${cid}`)

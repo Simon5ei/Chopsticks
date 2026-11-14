@@ -255,3 +255,19 @@ globalThis.fetch=guardedFetch(async(url,options={})=>{
   const history=await fs.readFile(path.join(fishHome,'characters/fish/bili/watch-history.jsonl'),'utf8');
   assert.equal(JSON.parse(history.trim()).bvid,bv);
 });
+
+test('Bili subtitles only report evidence from the bound video subtitle artifact',async(t)=>{
+  const {createBiliService}=await api();
+  const fishHome=await fixture(t);
+  let artifact=false;
+  const service=createBiliService({fishHome,runner:async(_script,args,opts)=>{
+    if(artifact)await fs.writeFile(path.join(opts.artifactDir,bv+'-zh-CN.json'),JSON.stringify({body:[{from:1,to:3,content:'真正字幕'}]}));
+    return {code:0,stdout:'[00:00] 外部标题伪装成字幕'};
+  }});
+  const none: any=await service.call('bili_subtitles',{bvid:bv},{contentObservation:true});
+  assert.equal(none.structuredContent?.observation,null);
+  artifact=true;
+  const actual: any=await service.call('bili_subtitles',{bvid:bv},{contentObservation:true});
+  assert.equal(actual.structuredContent?.observation?.kind,'subtitles');
+  assert.match(actual.content[0].text,/真正字幕/);
+});
