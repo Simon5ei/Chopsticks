@@ -145,7 +145,7 @@ let idleTimer = null;
 
 function scheduleIdle() {
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => { void closeLensBrowser(); }, IDLE_MS);
+  idleTimer = setTimeout(() => { closeLensBrowser().catch(() => {}); }, IDLE_MS);
   idleTimer.unref?.();
 }
 

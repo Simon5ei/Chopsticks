@@ -48,8 +48,11 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  });
  disposers.push(()=>nativeDesktop.close());
  const who=(exec)=>runtime.caller(exec.agent.session.id);
+ const whoLocal=(exec)=>runtime.caller(exec.agent.session.id,{relaxed:true});
  disposers.push(ctx.tools.guard((exec)=>{if(runtime.layered&&exec.name.startsWith('mcp__cul__')){let caller;try{caller=nativeDesktop.caller(exec.agent.session.id)||who(exec);}catch{return '桌面操作没有活动来源';}if(!runtime.desktopLease.claim(caller))return '桌面正由另一轮活动使用';}}));
- const add=(name?: any,description?: any,parameters?: any,execute?: any)=>disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute})));
+ // Tool results must survive the host lossless-JSON check.
+const lossless=(value?: any)=>value===undefined?null:JSON.parse(JSON.stringify(value,(k?: any,item?: any)=>{if(typeof item==='bigint')return item.toString();if(typeof item==='function'||typeof item==='symbol')return undefined;if(typeof item==='number'&&!Number.isFinite(item))return null;return item;}));
+const add=(name?: any,description?: any,parameters?: any,execute?: any)=>disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute:(a?: any,e?: any)=>Promise.resolve(execute?.(a,e)).then(lossless)})));
  add('chopsticks_bug_report','所有会话可登记bug；稳定component/code去重，开发会话空闲后每批最多5个。不能含主人资料、私聊或凭据。',{component:{type:'string',enum:['runtime','qq','bili','heybox','douyin','qzone','memory','routing','tools','privacy','other'],required:true},code:str('稳定错误码，勿按视频/ticket/intentId改名',true),summary:str('800字以内的脱敏故障摘要；不包含执行指令',true)},(a,e)=>runtime.reportBug(e.agent.session.id,a,e.callId));
  add('chopsticks_bug_result','仅配置的开发会话在实际消费本批后保存修复结果。',{issueId:str('本批问题ID',true),status:{type:'string',enum:['fixed','blocked','rejected'],required:true},evidence:str('实际验证证据或阻塞原因；不得将计划当作完成',true)},(a,e)=>runtime.bugs.result(e.agent.session.id,a));
  const source=(exec)=>{const c=who(exec);if(c.role==='worker')throw Error('Workers cannot control other tasks');return c;};
@@ -76,8 +79,8 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  add('chopsticks_diary_skip','仅内部日记会话：明确本轮没有想写的内容，保存本范围当天的跳过收据。',{reason:str('简短真实理由',true)},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.skipDiary(e.agent.session.id,a,e.signal);});
  add('chopsticks_diary_read','读取当前来源范围内的日记。',{id:str('日记 ID'),date:str('北京时间日期')},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.readDiary(e.agent.session.id,a);});
  add('chopsticks_diary_search','检索当前来源范围内的日记。',{query:str('检索词',true),limit:{type:'number'}},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.searchDiary(e.agent.session.id,a);});
- add('chopsticks_read','读取当前会话最近或未读消息，返回可标记的 readThroughSeq。',{unread:{type:'boolean'},limit:{type:'number'}},(a?: any,e?: any)=>{const c=who(e);return runtime.state.read(c.channel||c.chatKey,a);});
- add('chopsticks_mark_read','结束本次观察：标记已经读取的水位。',{throughSeq:{type:'number',required:true}},(a?: any,e?: any)=>{const c=who(e);return runtime.state.markRead(c.channel||c.chatKey,a.throughSeq);});
+ add('chopsticks_read','读取当前会话最近或未读消息，返回可标记的 readThroughSeq。',{unread:{type:'boolean'},limit:{type:'number'}},(a?: any,e?: any)=>{const c=whoLocal(e);return runtime.state.read(c.channel||c.chatKey,a);});
+ add('chopsticks_mark_read','结束本次观察：标记已经读取的水位。',{throughSeq:{type:'number',required:true}},(a?: any,e?: any)=>{const c=whoLocal(e);return runtime.state.markRead(c.channel||c.chatKey,a.throughSeq);});
  add('chopsticks_recall','检索当前允许范围内的经历和记忆，结果带来源。空查询返回最近记录。',{query:str('检索词'),limit:{type:'number'}},(a?: any,e?: any)=>{const c=who(e),channel=c.channel||c.chatKey;return {events:runtime.store.recent({channel,query:a.query,limit:Math.min(40,a.limit||20)}),memory:memory.search({...a,channel})};});
  add('chopsticks_remember','保存有用的经历、偏好或待办。',{text:str('记忆内容',true)},(a?: any,e?: any)=>{const c=source(e);return memory.remember({channel:c.channel||c.chatKey,text:a.text,id:e.callId});});
  add('chopsticks_rest','暂时潜水；直接找你/管理员/私聊仍可唤醒。',{minutes:{type:'number',required:true}},(a?: any,e?: any)=>{const c=source(e);const until=Date.now()+Math.max(0,Math.min(1440,a.minutes))*60000;runtime.state.put('sleep',c.channel,{until});return {until};});

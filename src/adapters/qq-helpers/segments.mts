@@ -13,13 +13,18 @@ export function segmentsOf(message?: any) {
   if (last < value.length) result.push({ type: 'text', data: { text: decode(value.slice(last)) } });
   return result;
 }
+const sizeOf = (value) => { const n = Number(value); return Number.isFinite(n) && n > 0 && n <= 1024 * 1024 * 1024 ? `:${Math.max(1, Math.round(n / 1024))}KB` : ''; };
+const secondsOf = (value) => { const n = Number(value); return Number.isFinite(n) && n > 0 && n <= 3600 ? `:${Math.round(n)}s` : ''; };
 export function textOf(segments?: any) {
   return segments.map(({ type, data }: { type?: any; data?: any; [key: string]: any }) => {
     if (type === 'text') return String(data.text ?? '');
     if (type === 'at') return `[@${data.qq}]`;
     if (type === 'reply') return `[引用消息 ${data.id}]`;
-    if (type === 'image' || type === 'mface') return `[${type === 'image' ? '图片' : '表情'}${data.summary ? `:${String(data.summary).slice(0, 80)}` : ''}]`;
-    if (type === 'forward') return '[合并转发]';
+    if (type === 'image' || type === 'mface') return `[${type === 'image' ? '图片' : '表情'}${data.summary ? `:${String(data.summary).slice(0, 80)}` : ''}${sizeOf(data.file_size)}]`;
+    if (type === 'video') return `[视频${secondsOf(data.duration ?? data.length)}${sizeOf(data.file_size)}]`;
+    if (type === 'record') return `[语音${secondsOf(data.duration)}]`;
+    if (type === 'json' || type === 'xml') return '[卡片]';
+    if (type === 'forward') return `[合并转发${typeof data.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(data.id) ? `:${data.id}` : ''}]`;
     if (type === 'face') return `[表情 ${data.id}]`;
     return `[${type}]`;
   }).join('');

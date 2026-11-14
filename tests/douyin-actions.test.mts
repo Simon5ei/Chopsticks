@@ -153,3 +153,35 @@ test('adapter cannot confirm a publish without authenticated account and public 
   assert.equal((await p.write({action:'publish',targetId:'own-public',text:'pong',intentId:'one'})).confirmed,false);await p.close();
  }
 });
+
+test('peer lookup uses the production conversation row markers and searches before giving up',async()=>{
+ const {locatePeerConversation}=await import('../src/platforms/douyin/actions.mjs');
+ const make=(appearAfterSearch,textFallback=0,inRow=-1)=> {
+  let searched=false;
+  const titled={filter(){return this;},first(){return this;},async waitFor(){if(!appearAfterSearch||searched)return;throw Object.assign(Error('timeout'),{name:'TimeoutError'});},async count(){return appearAfterSearch?(searched?1:0):0;}};
+  const plain={filter(){return this;},first(){return this;},async waitFor(){if(!appearAfterSearch)throw Object.assign(Error('timeout'),{name:'TimeoutError'});},async count(){return appearAfterSearch?(searched?1:0):0;}};
+  const title={getByText(){return title;}};
+  let cold=false;const base={filter(opts?: any){return opts?.has?titled:plain;},async count(){return 0;},first(){return this;},async waitFor(){if(cold)return;cold=true;throw Object.assign(Error('t'),{name:'TimeoutError'});}};
+  const search={first(){return this;},async count(){return 1;},async isVisible(){return true;},async fill(){searched=true;}};
+  const textHit={filter(){return this;},async count(){return textFallback;},async evaluateAll(){return inRow;},nth(){return this;},async evaluate(){return true;},first(){return this;},async isVisible(){return true;},async click(){}};const p={locator(sel?: any){if(String(sel).includes('conversationConversationItemtitle'))return title;if(String(sel).includes('搜索'))return search;return base;},getByText(){return textHit;},waitForTimeout:async()=>{}};
+  return p;
+ };
+ const hit=await locatePeerConversation({p:make(true),nickname:'小明'});
+ assert.equal(hit.found,true);assert.equal(hit.searched,true);
+ const miss=await locatePeerConversation({p:make(false),nickname:'小明'});
+ assert.equal(miss.found,false);assert.equal(miss.searched,true);
+ const multi=await locatePeerConversation({p:make(false,9,2),nickname:'小明'});assert.equal(multi.found,true);assert.equal(multi.viaText,true);assert.equal(multi.count,1);
+ const viaText=await locatePeerConversation({p:make(false,1),nickname:'小明'});assert.equal(viaText.found,true);assert.equal(viaText.viaText,true);
+ const direct=await locatePeerConversation({p:make(true),nickname:'小明'});
+ assert.equal(direct.found,true);
+ const rowsSel=await import('../src/platforms/douyin/actions.mjs');
+ assert.match(rowsSel.CONVERSATION_ROWS,/data-e2e="conversation-item"/);
+});
+
+test('missing profile nickname is reported separately from rows that do not match',async()=>{
+ const {advancedWrite}=await import('../src/platforms/douyin/actions.mjs');
+ const control={count:async()=>1,isVisible:async()=>true,filter(){return this;},first(){return this;},getByText(){return this;},waitFor:async()=>{},click:async()=>{},fill:async()=>{}};
+ const page: any={url:()=> 'https://www.douyin.com/jingxuan',evaluate:async()=>({status_code:0,user:{uid:'222222222',sec_uid:'MS4wLjABAAAAfixture'}}),locator:()=>control,waitForResponse:()=>new Promise(()=>{}),goto:async()=>{}};
+ const reports=[];const r: any=await advancedWrite({p:page,input:{action:'dm',targetId:'222222222',text:'hello',context:{secUid:'MS4wLjABAAAAfixture'}},identity:async()=> '111111111',receipts:{},report:async(d)=>reports.push(d)});assert.equal(reports[0].branch,'no_nickname');
+ assert.equal(r.code,'PEER_NAME_MISSING');assert.equal(r.state,'refused');
+});

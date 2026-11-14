@@ -1,5 +1,5 @@
 import {sanitizePublisherDiagnostics,diagnosticFailure} from './publish-diagnostics.mjs';
-export function validDmDiagnostic(args?: any){return args?.action==='dm_controls'&&Object.keys(args).every((k)=>['action','peerName','targetId','secUid'].includes(k))&&typeof args.peerName==='string'&&args.peerName.trim().length>0&&args.peerName.length<=80&&!/[\x00-\x1f\x7f]/.test(args.peerName)&&(args.targetId===undefined&&args.secUid===undefined||typeof args.targetId==='string'&&typeof args.secUid==='string'&&/^\d{6,30}$/.test(args.targetId)&&/^MS4w[A-Za-z0-9_-]{8,200}$/.test(args.secUid));}
+export function validDmDiagnostic(args?: any){return args?.action==='dm_controls'&&Object.keys(args).every((k)=>['action','peerName','targetId','secUid'].includes(k))&&(args.peerName===undefined||typeof args.peerName==='string'&&args.peerName.trim().length>0&&args.peerName.length<=80&&!/[\x00-\x1f\x7f]/.test(args.peerName))&&(args.targetId===undefined&&args.secUid===undefined||typeof args.targetId==='string'&&typeof args.secUid==='string'&&/^\d{6,30}$/.test(args.targetId)&&/^MS4w[A-Za-z0-9_-]{8,200}$/.test(args.secUid));}
 // This function is serialized into the already-owned page. Stream at most
 // 64 KiB/64 chunks before decoding JSON; no response.json()/body() allocation.
 export async function fetchDiagnosticProfile(url?: any){
@@ -17,8 +17,9 @@ const markup=(x)=>Object.fromEntries(['tag','class','role','e2e'].filter((k)=>ty
 export function sanitizeDiagnostics(value?: any){
  if(value?.kind!=='dm_controls')return sanitizePublisherDiagnostics(value);
  const out: any={kind:'dm_controls',state:['observed','unavailable','error'].includes(value.state)?value.state:'error'};
- for(const key of (['entries','legacyRows','peers','editorCount','profilePeers','conversationRows'] as const))if(count(value[key]))out[key]=value[key];
- for(const key of (['profileVerified','profileNameMatches'] as const))if(typeof value[key]==='boolean')out[key]=value[key];
+ for(const key of (['entries','legacyRows','peers','editorCount','profilePeers','conversationRows','e2eRowRows','titleCount','titleMatches','uidRows','profileInsideRows'] as const))if(count(value[key]))out[key]=value[key];
+ if(Array.isArray(value.e2eNames)&&value.e2eNames.length)out.e2eNames=value.e2eNames.filter((x?: any)=>typeof x==='string'&&/^[A-Za-z0-9_-]{1,60}$/.test(x)).slice(0,30);
+ for(const key of (['profileVerified','profileNameMatches','profileResolved'] as const))if(typeof value[key]==='boolean')out[key]=value[key];
  if(value.layout&&typeof value.layout==='object'){
   const x=value.layout;out.layout={};for(const k of (['viewportWidth','windowWidth','screenWidth','entryWidth','entryHeight'] as const))if(count(x[k]))out.layout[k]=x[k];
   if(typeof x.entryPresent==='boolean')out.layout.entryPresent=x.entryPresent;
@@ -43,13 +44,22 @@ export async function dmDiagnostics(page?: any,{peerName,targetId,secUid,onPhase
   }
   enter('navigation');await page.goto('https://www.douyin.com/',{waitUntil:'domcontentloaded',timeout:10000});
   enter('attachment');const entry=page.locator('[data-e2e="im-entry"]');
-  try{await entry.first().waitFor({state:'visible',timeout:5000});}catch(e){
+  try{await entry.first().waitFor({state:'visible',timeout:15000});}catch(e){
    if(e?.name!=='TimeoutError')throw e;check();
    const layout=await page.evaluate(()=>{const el=document.querySelector('[data-e2e="im-entry"]'),style=el?getComputedStyle(el):null,box=el?.getBoundingClientRect();return {viewportWidth:innerWidth,windowWidth:outerWidth,screenWidth:screen.width,documentState:document.readyState,entryPresent:!!el,entryWidth:Math.round(box?.width||0),entryHeight:Math.round(box?.height||0),entryDisplay:style?.display,entryVisibility:style?.visibility};});
    check();return sanitizeDiagnostics({kind:'dm_controls',state:'unavailable',layout});
   }
   check();result.entries=await entry.count();if(result.entries!==1)return sanitizeDiagnostics(result);
   check();await entry.click({timeout:3000});
+  if(targetId&&secUid){try{const probe=await page.evaluate(async ({id,sec})=>{
+    let name='';
+    try{const r=await fetch('https://www.douyin.com/aweme/v1/web/user/profile/other/?device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id='+encodeURIComponent(sec),{credentials:'include'});const d=await r.json();if(d?.status_code===0&&String(d.user?.uid)===String(id)&&typeof d.user?.nickname==='string')name=d.user.nickname;}catch{}
+    const titles=[...document.querySelectorAll('.conversationConversationItemtitle')].map((e)=>(e.textContent||'').trim());
+    const rows=[...document.querySelectorAll('[class*="conversationConversationItemwrapper"],[data-e2e="conversation-item"]')];
+    return {resolved:!!name,titleCount:titles.length,titleMatches:name?titles.filter((t)=>t===name).length:0,uidRows:rows.filter((el)=>{const h=el.outerHTML;return typeof h==='string'&&h.includes(String(id));}).length};
+   },{id:targetId,sec:secUid});
+   if(probe&&typeof probe==='object'){result.profileResolved=probe.resolved===true;result.titleCount=probe.titleCount;result.titleMatches=probe.titleMatches;result.uidRows=probe.uidRows;}
+  }catch{}}
   const peer=page.getByText(peerName,{exact:true}).filter({visible:true});
   try{await peer.first().waitFor({state:'visible',timeout:5000});}catch(e){if(e?.name!=='TimeoutError')throw e;}
   check();result.legacyRows=await page.locator('[class*="conversationConversationItemwrapper"]').count();result.peers=await peer.count();
@@ -62,6 +72,8 @@ export async function dmDiagnostics(page?: any,{peerName,targetId,secUid,onPhase
   // ancestry only; never click a global text match, even when unique.
   if(result.peers>0&&result.peers<=4)result.peerNodes=await describeNodes(peer);
   if(profileName)result.profilePeers=await page.getByText(profileName,{exact:true}).filter({visible:true}).count();
+  if(profileName){try{result.profileInsideRows=await page.locator('[class*="conversation"],[data-e2e*="conversation"]').getByText(profileName,{exact:true}).filter({visible:true}).count();}catch{}}
+  if(targetId){try{result.uidRows=await page.evaluate((id)=>{let n=0;document.querySelectorAll('[class*="conversationConversationItemwrapper"],[data-e2e="conversation-item"]').forEach((el)=>{const html=el.outerHTML;if(typeof html==='string'&&html.includes(String(id)))n++;});return n;},targetId);}catch{}}
   if(targetId&&result.peers===1){
    // These exact row/title markers were observed on the production inbox.
    const rows=page.locator('[data-e2e="conversation-item"]').filter({has:page.locator('.conversationConversationItemtitle').and(page.getByText(peerName,{exact:true})),visible:true});

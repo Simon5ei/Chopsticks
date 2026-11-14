@@ -255,3 +255,14 @@ globalThis.fetch=guardedFetch(async(url,options={})=>{
   const history=await fs.readFile(path.join(fishHome,'characters/fish/bili/watch-history.jsonl'),'utf8');
   assert.equal(JSON.parse(history.trim()).bvid,bv);
 });
+
+test('inbox failures are classified into distinguishable non-private codes',async()=>{
+ const {inboxFailureCode}=await import('../src/host/inbox-failure.mjs');
+ assert.equal(inboxFailureCode(Object.assign(new Error('request timed out'),{code:'ETIMEDOUT'})),'inbox_timeout');
+ assert.equal(inboxFailureCode(Object.assign(new Error('HTTP 429 too many requests'),{})),'inbox_rate_limited');
+ assert.equal(inboxFailureCode(Object.assign(new Error('HTTP 403 forbidden'),{})),'inbox_auth_required');
+ assert.equal(inboxFailureCode(Object.assign(new Error('fetch failed ENOTFOUND api.bilibili.com'),{})),'inbox_network_error');
+ assert.equal(inboxFailureCode(Object.assign(new Error('502 bad gateway'),{})),'inbox_platform_unavailable');
+ assert.equal(inboxFailureCode(Object.assign(new Error('unknown'),{name:'AbortError'})),'inbox_aborted');
+ assert.equal(inboxFailureCode(new Error('mystery')),'inbox_unavailable');
+});

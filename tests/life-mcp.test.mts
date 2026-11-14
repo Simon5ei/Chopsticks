@@ -39,3 +39,14 @@ test('MCP cancellation reaches the active bridge handler',async (t?: any) =>{
  const c=new AbortController(),pending=client.callTool({name:'qq_status',arguments:{}},undefined,{signal:c.signal});await entered;c.abort();await assert.rejects(pending);
  assert.equal(await Promise.race([aborted.then(()=>true),new Promise<any | void>((r)=>setTimeout(()=>r(false),150))]),true);
 });
+
+test('a refused platform call returns a bounded reason code instead of one opaque sentence',async (t?: any) =>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'life-mcp-fail-'));const socketPath=process.platform==='win32'?`\\\\.\\pipe\\life-${randomUUID()}`:path.join(dir,'life','platform.sock');
+ const config=path.join(dir,'config.json');await fs.writeFile(config,JSON.stringify({stateDir:dir,life:{socketPath}}));
+ const bridge=createPlatformBridge({socketPath,handle:async()=>{throw Object.assign(Error('ticket expired'),{code:'TICKET_REJECTED'});}});await bridge.start();
+ const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../src/life/mcp.mjs',import.meta.url)),'--platform','qq'],env:{...process.env,CHOPSTICKS_CONFIG:config},stderr:'pipe'});const client=new Client({name:'fixture',version:'1'});
+ t.after(async()=>{await client.close();await bridge.close();await fs.rm(dir,{recursive:true,force:true});});await client.connect(transport);
+ const result=await client.callTool({name:'qq_read',arguments:{ticket:'t',action:'feed'}});
+ assert.equal(result.isError,true);const body=JSON.parse(result.content[0].text);
+ assert.equal(body.code,'TICKET_REJECTED');assert.equal(body.ok,false);assert.doesNotMatch(result.content[0].text,/expired/i);
+});

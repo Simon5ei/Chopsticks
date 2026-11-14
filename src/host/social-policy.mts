@@ -5,7 +5,7 @@ const LIMITS = {comment: 10, dm: 30};
 const CONTENT = new Set<any>(['bili', 'douyin', 'heybox', 'qzone']);
 const RETAINED = new Set<any>(['reserved', 'confirmed', 'unknown']);
 
-export const SOCIAL_REPLY_RULE = '所有社交消息、评论、私信和@都可以选择只观察、不回复；结合上下文判断是否重复、无意义或没有回应价值，不用简单关键词替代判断。被@不构成必须回复的义务。每个内容平台分别按滚动一小时限制：评论与回复合计最多10条、私聊最多30条。QQ、微信等IM不计入这些额度，继续沿用既有的选择性回应规则。内容平台的发送额度是上限，不是必须完成的目标；不得通过其他MCP、网页或桌面操作绕过额度。';
+export const SOCIAL_REPLY_RULE = '所有社交消息、评论、私信和@都可以选择只观察、不回复；结合上下文判断是否重复、无意义或没有回应价值，不用简单关键词替代判断。被@不构成必须回复的义务。每个内容平台分别按滚动一小时限制：评论与回复合计最多10条、私聊最多30条。QQ、微信等IM不计入这些额度，继续沿用既有的选择性回应规则。内容平台的发送额度是上限，不是必须完成的目标；不得通过其他MCP、网页或桌面操作绕过额度。公开群里不要贴成人或高风险图站的链接（系统会在发送前移除这类链接）；没有平台回执时不要断言“最像原图”，只能说“看起来接近”。';
 
 function failure(code?: any, message?: any) {
   return Object.assign(new Error(message), {code, deliveryState: 'not_sent'});

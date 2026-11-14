@@ -1,5 +1,7 @@
+import {inboxFailureCode} from './inbox-failure.mjs';
 import {createBugPipeline,BUG_REPORT_RULE} from './bug-pipeline.mjs';
 import {OWNER_PRIVACY_RULE,assertOwnerPrivacy,protectedOwnerValues} from './owner-privacy.mjs';
+import {stripHighRiskLinks} from './link-policy.mjs';
 import {createAnimeCommands,commandPrefix} from './anime-command.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -103,10 +105,13 @@ export async function createRuntime({config,controller,getAgent=()=>null,createR
   const agent=getAgent(sessionId);
   for(const message of [...agent?.inbox?.nextTurn??[],...agent?.inbox?.nextStep??[]])if(message.source?.rpcId===requestId)try{await controller.updateQueue({sessionId,itemId:message.id,action:{kind:'remove'}});}catch{}
  }
- function caller(sessionId?: any){
+ function caller(sessionId?: any,{relaxed=false}: {relaxed?: boolean}={}){
   const worker=coordinator?.getWorkerContext(sessionId);if(worker){if(worker.active===false)throw Error('Task is inactive');return {...worker,sessionId,canWrite:false};}
   const bound=state.binding(sessionId);if(!bound)throw Error('No trusted channel binding');
-  if(layered&&bound.requestId){const job=state.get('platform-job',bound.requestId);if(bound.interrupted||(job&&job.status!=='starting'))throw Error('Platform turn is inactive or interrupted');}
+  if(layered&&bound.requestId){const job=state.get('platform-job',bound.requestId);
+   // Local conversation/memory reads stay available after a turn ends; writes and
+   // platform operations still require the live turn. Interrupted bindings always refuse.
+   if(bound.interrupted||(!relaxed&&job&&job.status!=='starting'))throw Error(`Platform turn is inactive or interrupted (job ${job?.status||'missing'})`);}
   return {sessionId,characterId:character().id,chatKey:bound.channel,role:bound.channel==='bili:public'?'bili':bound.channel.startsWith('bili:dm:')?'bili-dm':'qq',canWrite:bound.channel.startsWith('bili:')&&config.bili?.allowWrite===true,...bound};
  }
  function contextCaller(sessionId?: any,eventId?: any){
@@ -276,6 +281,8 @@ export async function createRuntime({config,controller,getAgent=()=>null,createR
  async function send(sessionId: any,{text,replyTo}: { text?: any; replyTo?: any; [key: string]: any },signal?: any){
   signal?.throwIfAborted();
   const bound=caller(sessionId);assertOwnerPrivacy(text,{config,channel:bound.channel});if(!/^[gp]:/.test(bound.channel))throw Error('QQ send requires QQ source');
+  // Public groups never receive adult/high-risk links; the link is stripped, the message kept.
+  if(bound.channel.startsWith('g:'))text=stripHighRiskLinks(text);
   if(layered)replyTickets.authorize(bound.contextTicket,{platform:'qq',operation:'write',targetId:bound.channel.slice(2)});
   const trigger=store.get(bound.eventId);const direct=trigger?.meta?.addressed||trigger?.meta?.admin;
   if(fishGuard.blockSends&&!(direct&&fishGuard.bypassDirectAddress)&&(fishAssessment(bound.channel).blocked||state.get('fish-cooldown',bound.channel)?.until>Date.now()))return {sent:false,reason:'fish_cooldown'};
@@ -370,7 +377,7 @@ export async function createRuntime({config,controller,getAgent=()=>null,createR
    const partial=result.truncated===true||(result.warnings||[]).length>0;
    for(const kind of ['comment','dm'])if(kind==='comment'?comments:dm)state.put('bili-inbox',kind,{initializedAt:initialized[kind]?.initializedAt||at,complete:!partial});
    state.put('health','bili-social',{ok:!partial,state:partial?'partial':'ready',at,received,truncated:result.truncated===true,warnings:(result.warnings||[]).length,comments,dm});
-  }catch{if(!closed)state.put('health','bili-social',{ok:false,state:'error',at,code:'inbox_unavailable',comments,dm});}
+  }catch(error){if(!closed)state.put('health','bili-social',{ok:false,state:'error',at,code:inboxFailureCode(error),comments,dm});}
   finally{signals.delete(control);socialBusy=false;}
  }
  const feed=feedFactory({fishHome});
