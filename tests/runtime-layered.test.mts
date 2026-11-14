@@ -63,3 +63,13 @@ test('IM Router is a real persistent session while each QQ contact has its own e
  const views=(await f.runtime.queryConsole('overview')).sessions.filter((s)=>s.role==='router');
  assert.ok(views.some((v)=>v.sessionId===f.assessments[0].sessionId&&v.native===true));
 });
+
+test('local reads survive a finished turn while writes still need the live one',async (t?: any) =>{
+ const f=await setup(t);await f.runtime.ingest(received('a',1,'hello'));await until(()=>f.deliveries.length===1);
+ const first=f.deliveries[0];
+ f.runtime.event({id:first.sessionId},{type:'user/message',data:{message:{source:{rpcId:first.requestId}}}});
+ assert.equal(f.runtime.caller(first.sessionId).eventId,'a');
+ f.runtime.event({id:first.sessionId},{type:'turn/end',data:{}});await delay(10);
+ assert.throws(()=>f.runtime.caller(first.sessionId),/inactive or interrupted/);
+ assert.equal(f.runtime.caller(first.sessionId,{relaxed:true}).eventId,'a');
+});

@@ -71,7 +71,7 @@ test('the dispatch prompt is recorded with persona as a config segment and liter
   const persona = renders[0].segments.find((s: any) => s.slot === 'persona');
   assert.equal(persona.kind, 'config');
   assert.equal(f.runtime.telemetry.decisions.segment(persona.hash), 'Fixture fish persona');
-  assert.ok(renders[0].segments.some((s: any) => s.slot === '@social.reply-rule' && s.kind === 'static'));
+  for (const included of ['@privacy.owner-rule', '@bug.report-rule', '@social.reply-rule']) assert.ok(renders[0].segments.some((s: any) => s.slot === included && s.kind === 'static'), `dispatch must carry ${included}`);
   assert.equal(renders[0].snapshotId, f.runtime.telemetry.decisions.currentSnapshot());
 });
 

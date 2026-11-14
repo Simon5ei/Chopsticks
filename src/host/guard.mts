@@ -15,6 +15,7 @@ export function apply(ctx?: any,config: Record<string, any>={}){
  if(mode==='bili-dm')for(const tool of ['bili_video','bili_subtitles'])allowed.add(`mcp__bilibili__${tool}`);
  if(['bili','qzone','heybox','douyin'].includes(mode))for(const tool of ['chopsticks_surf_next','chopsticks_content_reflect'])allowed.add(tool);
  if(['qq','bili','qzone','heybox','douyin'].includes(mode))for(const tool of desktop)allowed.add(tool);
+ allowed.add('chopsticks_bug_report');
  let dispose,signature,closed=false,pending=false;
  const refresh=()=>{if(closed)return;try{const known=ctx.tools.view(undefined).visible;const allow=[...allowed].filter((n)=>known.has(n)),next=allow.join('|');if(next===signature)return;signature=next;dispose?.();dispose=ctx.tools.restrict({allow});}catch(error){if(error?.code!=='INACTIVE_EFFECT')throw error;closed=true;}};
  refresh();ctx.on('tools/change',()=>{if(pending||closed)return;pending=true;queueMicrotask(()=>{pending=false;refresh();});});

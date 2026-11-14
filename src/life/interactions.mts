@@ -1,3 +1,4 @@
+import {inboxFailureCode} from '../host/inbox-failure.mjs';
 import {createHash} from 'node:crypto';
 const hash=(x)=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 export function platformContext(item?: any){
@@ -56,7 +57,7 @@ export function createInteractionPoller({owners,config,state,store,emit,now,sign
      // No high-water advance until the older pages have actually been drained.
      state.put('life-inbox',key,{initializedAt:mark.initializedAt,seeding:!!mark.seeding&&!complete&&!unpageable,...peer?{sequence:complete||(mark.seeding&&unpageable)?maxSequence:mark.sequence||'0'}:{},...!complete?{cursor,pendingSequence:maxSequence}:{},at,emitted,omitted,state:!complete||omitted?'partial':'ready',...(unpageable?{code:'pagination_unavailable'}:{})});
      state.put('health',`life-inbox:${key}`,{state:!complete||omitted?'partial':'ready',at,emitted,omitted});
-    }catch{if(!signal.aborted)state.put('health',`life-inbox:${key}`,{state:'error',at,code:'inbox_unavailable'});}
+    }catch(error){if(!signal.aborted)state.put('health',`life-inbox:${key}`,{state:'error',at,code:inboxFailureCode(error)});}
    }
   }
  }

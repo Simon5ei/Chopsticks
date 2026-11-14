@@ -71,6 +71,9 @@ export function managedProfileIsIdle(profileDir?: any) {
   return true;
  }catch{return false;}
 }
+// A dead or closed desktop worker is an environment state, not a platform
+// transport fault; callers need the difference to decide what to do.
+export function workerCode(error?: any){if(error?.code==='DESKTOP_UNAVAILABLE')return 'DESKTOP_UNAVAILABLE';const message=String(error?.message||'');return /worker unavailable|closed|worker failure/i.test(message)?'OWNER_UNAVAILABLE':'TRANSPORT_ERROR';}
 export function createUserPlatform({launch,launchResolver,spawnImpl=spawn,killImpl=process.kill.bind(process),profileIsIdle=managedProfileIsIdle,stopTimeoutMs=5000,diagnosticsTimeoutMs=35000}: { launch?: any; launchResolver?: any; spawnImpl?: any; killImpl?: any; profileIsIdle?: any; stopTimeoutMs?: number; diagnosticsTimeoutMs?: number; [key: string]: any }={}) {
  let child,closed=false,dead=false,stopping=false,next=0, pending=new Map(),ended; const settled=()=>{for(const p of pending.values())p.reject(Error('worker unavailable'));pending.clear();};
  function stop(){if(!dead&&!stopping&&child?.pid){stopping=true;try{killImpl(-child.pid,'SIGTERM');}catch{try{child.kill?.('SIGTERM');}catch{}}}}
@@ -101,9 +104,9 @@ export function createUserPlatform({launch,launchResolver,spawnImpl=spawn,killIm
  const within=async(promise?: any,ms?: any)=>{let timer;try{return await Promise.race([promise.then(()=>true,()=>true),new Promise<boolean>((resolve)=>{timer=setTimeout(()=>resolve(false),ms);})]);}finally{clearTimeout(timer);}};
  return {platform:'douyin',capabilities,
   async diagnostics(args?: any){if(!child||dead||stopping)return {state:'unavailable',code:'OWNER_NOT_RUNNING'};try{return sanitizePublisherDiagnostics(await call('diagnostics',args));}catch(e){return diagnosticFailure('owner_ipc',e?.code==='DIAGNOSTIC_DEADLINE'?'deadline':args?.signal?.aborted?'cancelled':'owner_unavailable');}},
-  async status(args?: any){try{return await call('status',args);}catch(e){return {state:'error',capabilities,code:e.code==='DESKTOP_UNAVAILABLE'?'DESKTOP_UNAVAILABLE':'TRANSPORT_ERROR'};}},
-  async login(args?: any){try{return await call('login',args);}catch(e){return {state:'error',code:e.code==='DESKTOP_UNAVAILABLE'?'DESKTOP_UNAVAILABLE':'TRANSPORT_ERROR'};}},
-  async read(args?: any){try{return await call('read',args);}catch(e){return {items:[],truncated:true,warnings:[e.code==='DESKTOP_UNAVAILABLE'?'DESKTOP_UNAVAILABLE':'TRANSPORT_ERROR']};}},
+  async status(args?: any){try{return await call('status',args);}catch(e){return {state:'error',capabilities,code:workerCode(e)};}},
+  async login(args?: any){try{return await call('login',args);}catch(e){return {state:'error',code:workerCode(e)};}},
+  async read(args?: any){try{return await call('read',args);}catch(e){return {items:[],truncated:true,warnings:[workerCode(e)]};}},
   async write(args?: any){try{return await call('write',args);}catch(e){return {confirmed:false,state:e.code==='DESKTOP_UNAVAILABLE'?'refused':'uncertain',code:e.code==='DESKTOP_UNAVAILABLE'?'DESKTOP_UNAVAILABLE':'SUBMISSION_UNKNOWN'};}},
   async close(){
   if(closed)return;closed=true;if(!child)return;

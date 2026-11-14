@@ -339,3 +339,10 @@ test('cancelling a queued send before its HTTP turn prevents that message from b
   assert.equal(sendRequests, 1);
   assert.equal(f.events.length, 1);
 });
+
+test('media segments keep bounded type and size metadata instead of bare placeholders',async()=>{
+ const {textOf,segmentsOf}=await import('../src/adapters/qq-helpers/segments.mjs');
+ const text=textOf(segmentsOf('[CQ:image,file=a.jpg,summary=猫,file_size=2048][CQ:video,file=b.mp4,duration=12,file_size=1024][CQ:forward,id=abc123][CQ:json,data=e30=]'));
+ assert.equal(text,'[图片:猫:2KB][视频:12s:1KB][合并转发:abc123][卡片]');
+ assert.equal(textOf(segmentsOf('[CQ:image,file=a.jpg]')),'[图片]');
+});

@@ -34,7 +34,7 @@ export function createPlatformBridge({socketPath,handle,maxBytes=DEFAULT_MAX,tim
      if(operator&&['live_test','diagnostics'].includes(data.operation)){clearTimeout(timer);timer=setTimeout(()=>{controller.abort();finish(408,{error:'Platform request failed'});},180000);timer.unref();}
      const output=await handle({platform:data.platform,operation:data.operation,args:data.args},{operator,signal:controller.signal});
      let safe=sanitize(output);if(data.operation==='status'){safe=platformStatus(output);}else if(data.operation==='login'){safe=Object.fromEntries(['state','qrImagePath','expiresAt'].filter((k)=>output?.[k]!==undefined).map((k)=>[k,output[k]]));}const encoded=JSON.stringify({result:safe});if(Buffer.byteLength(encoded)>maxBytes)throw fail();finish(200,{result:safe});
-    }catch{finish(500,{error:'Platform request failed'});}
+    }catch(error){const code=typeof error?.code==='string'&&/^[A-Z][A-Z0-9_]{1,40}$/.test(error.code)?error.code:undefined;finish(500,{error:'Platform request failed',...(code?{code}:{})});}
    });
   });
   server.on('connection',(s)=>{sockets.add(s);s.on('close',()=>sockets.delete(s));});return server;
@@ -64,7 +64,7 @@ export function requestPlatform({socketPath,platform,operation,args={},signal,op
   let payload;try{payload=JSON.stringify({platform,operation,args});if(Buffer.byteLength(payload)>DEFAULT_MAX)throw fail();}catch{return reject(fail());}
   const req=http.request({socketPath:operator?socketPath+'.operator':socketPath,path:'/',method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(payload)},signal},(res)=>{
    let n=0;const chunks=[];res.on('data',(c)=>{n+=c.length;if(n>DEFAULT_MAX)req.destroy(fail());else chunks.push(c);});
-   res.on('error',()=>reject(fail()));res.on('end',()=>{try{const body=JSON.parse(Buffer.concat(chunks).toString());if(res.statusCode!==200||!Object.hasOwn(body,'result'))throw fail();resolve(body.result);}catch{reject(fail());}});
+   res.on('error',()=>reject(fail()));res.on('end',()=>{let body;try{body=JSON.parse(Buffer.concat(chunks).toString());}catch{return reject(fail());}if(res.statusCode!==200||!Object.hasOwn(body,'result'))return reject(typeof body?.code==='string'&&/^[A-Z][A-Z0-9_]{1,40}$/.test(body.code)?Object.assign(fail(),{code:body.code}):fail());resolve(body.result);});
   });req.setTimeout(operator&&['live_test','diagnostics'].includes(operation)?180000:TIMEOUT,()=>req.destroy(fail()));req.on('error',()=>reject(fail()));req.end(payload);
  });
 }

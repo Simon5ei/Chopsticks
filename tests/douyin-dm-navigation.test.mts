@@ -7,7 +7,7 @@ const vi=(n)=>{n=BigInt(n);const out=[];do{const b=Number(n&127n);n>>=7n;out.pus
 const v=(f?: any,n?: any)=>Buffer.concat([vi(f*8),vi(n)]),s=(f?: any,x?: any)=>{const b=Buffer.isBuffer(x)?x:Buffer.from(x);return Buffer.concat([vi(f*8+2),vi(b.length),b]);},pb=(...x)=>Buffer.concat(x);
 function fixture({rows=1,cached=false,initResponse=true,requestPeer=peer,requestConversation,requestText='hello',requestType=1,identityChanged=false,receiptMissing=false}: { rows?: number; cached?: boolean; initResponse?: boolean; requestPeer?: any; requestConversation?: any; requestText?: string; requestType?: number; identityChanged?: boolean; receiptMissing?: boolean; [key: string]: any }={}){
  const seen={navigations:0,profileClicks:0,entryClicks:0,rowWaits:0,sends:0,blocked:0,filled:0};let entryReady=false,rowReady=cached,editorReady=false,initialized=cached,gate,identityCalls=0;const waiters=[];
- const control={count:async()=>1,isVisible:async()=>true,filter(){return this;},first(){return this;},waitFor:async()=>{},click:async()=>{},fill:async()=>{seen.filled++;}};
+ const control={count:async()=>1,isVisible:async()=>true,filter(){return this;},first(){return this;},getByText(){return this;},waitFor:async()=>{},click:async()=>{},fill:async()=>{seen.filled++;}};
  const entry={...control,waitFor:async()=>{entryReady=true;},click:async()=>{assert.equal(entryReady,true);seen.entryClicks++;setImmediate(()=>{initialized=true;if(initResponse)emit({url:()=>'https://imapi.douyin.com/v1/message/get_message_by_init'});});}};
  const row={...control,count:async()=>rowReady?rows:0,waitFor:async()=>{seen.rowWaits++;assert.equal(seen.entryClicks,cached?0:1);if(!initialized)await new Promise<any | void>((r)=>setImmediate(r));if(!initialized||!rows)throw Object.assign(Error('not present'),{name:'TimeoutError'});rowReady=true;},click:async()=>{editorReady=true;}};
  const editor={...control,isVisible:async()=>editorReady,waitFor:async()=>assert.equal(editorReady,true)};
@@ -16,7 +16,7 @@ function fixture({rows=1,cached=false,initResponse=true,requestPeer=peer,request
   url:()=> 'https://www.douyin.com/jingxuan',
   evaluate:async(fn?: any,url?: any)=>{assert.match(url,/^https:\/\/www\.douyin\.com\/aweme\/v1\/web\/user\/profile\/other\//);return {status_code:0,user:{uid:peer,sec_uid:sec,nickname:'Fixture peer'}};},
   locator:(selector)=>selector.includes('im-entry')?entry:selector.includes('conversationConversationItemwrapper')?row:selector==='[data-e2e="msg-input"] .editor-kit-container[contenteditable="true"]'?editor:{...control,count:async()=>0,waitFor:async()=>{throw Object.assign(Error('absent control'),{name:'TimeoutError'});}},
-  getByText:()=>({...control,click:async()=>{seen.profileClicks++;}}),
+  getByText:()=>({...control,count:async()=>0,click:async()=>{seen.profileClicks++;}}),
   goto:async (url?: any) =>{seen.navigations++;if(url.includes('/user/'))emit({url:()=> 'https://www.douyin.com/aweme/v1/web/user/profile/other/',json:async()=>({status_code:0,user:{uid:peer,sec_uid:sec,nickname:'Fixture peer'}})});},
   waitForResponse:(p)=>!initResponse&&p({url:()=>'https://imapi.douyin.com/v1/message/get_message_by_init',request:()=>({})})?Promise.reject(Object.assign(Error('cached inbox sends no init request'),{name:'TimeoutError'})):new Promise<any | void>((resolve)=>waiters.push({p,resolve:(r)=>{if(r.url?.().includes('get_message_by_init'))initialized=true;resolve(r);}})),
   route:async(_matcher?: any,handler?: any)=>{gate=handler;},unroute:async()=>{},on(){},off(){},mainFrame:()=>page,

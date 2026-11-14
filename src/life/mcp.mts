@@ -7,6 +7,7 @@ import {ListToolsRequestSchema,CallToolRequestSchema} from '@modelcontextprotoco
 import {z} from 'zod';
 import {observationMedia} from './observation-media.mjs';
 import {requestPlatform} from './bridge.mjs';
+import {platformFailure} from './platform-failure.mjs';
 
 const platforms=new Set<any>(['qq','bilibili','qzone','heybox','douyin']);
 export async function platformSocketPath(){const file=process.env.CHOPSTICKS_CONFIG;if(!file)throw Error('Missing configuration');const config=JSON.parse(await fs.readFile(file,'utf8'));if(config.life?.socketPath)return config.life.socketPath;if(!config.stateDir)throw Error('Missing state directory');return path.join(config.stateDir,'life','platform.sock');}
@@ -27,7 +28,7 @@ export function createPlatformMcp({platform,socketPath}: { platform?: any; socke
       {type:'image',mimeType:'image/jpeg',data:sample.data}]};
     return {content:[{type:'text',text:JSON.stringify(rest)}]};
    }
-   return {content:[{type:'text',text:JSON.stringify(result)}]};}catch{return {isError:true,content:[{type:'text',text:'Platform operation failed or was refused.'}]};}
+   return {content:[{type:'text',text:JSON.stringify(result)}]};}catch(error){return {isError:true,content:[{type:'text',text:JSON.stringify(platformFailure(error))}]};}
  });return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{const i=process.argv.indexOf('--platform');const platform=i>=0?process.argv[i+1]:undefined;const socketPath=await platformSocketPath();await createPlatformMcp({platform,socketPath}).connect(new StdioServerTransport());}catch{process.stderr.write('Platform MCP could not start.\n');process.exitCode=1;}}

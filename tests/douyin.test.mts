@@ -159,3 +159,33 @@ test('detail visibility comes from explicit raw privacy state and cannot default
  const r=await fixture(t,{read:async()=>({items:[{aweme_id:'7704182557952331049',desc:'pong',author:{uid:'123456'},status:{private_status:0}}]})});
  assert.equal((await r.read({action:'detail',id:'7704182557952331049'})).items[0].visibility,'public');
 });
+
+test('comment control separates missing, hidden and ambiguous matches before any submit', async (t?: any) => {
+  const {createBrowserTransport}=await import('../src/platforms/douyin/transport.mjs');
+  const dir=await mkdtemp(join(tmpdir(),'douyin-comment-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const account='111111111',target='222222222',message='333333333';
+  const scenarios=[{count:0,visible:0,expect:{code:'CONTROL_NOT_FOUND'}},{count:2,visible:2,expect:{code:'CONTROL_AMBIGUOUS'}},{count:2,visible:1,expect:{confirmed:true}}];
+  for(const scenario of scenarios) {
+    let gate,sends=0,waiter;
+    const detailResponse={url:()=> 'https://www.douyin.com/aweme/v1/web/aweme/detail/',json:async()=>({status_code:0,aweme_detail:{aweme_id:target}})};
+    const control={count:async()=>scenario.count,isVisible:async()=>true,click:async()=>{},fill:async()=>{}};
+    const visibleControl={count:async()=>scenario.visible,isVisible:async()=>true,click:async()=>{},fill:async()=>{}};
+    const page: any={isClosed:()=>false,setDefaultTimeout(){},evaluate:async()=>account,url:()=>`https://www.douyin.com/video/${target}`,goto:async()=>{},
+      locator:()=>({...control,filter:()=>visibleControl}),route:async(_p?: any,h?: any)=>{gate=h;},unroute:async()=>{},
+      waitForResponse:(p?: any)=>new Promise<any | void>((resolve)=>{let matched=false;try{matched=p(detailResponse);}catch{}if(matched)resolve(detailResponse);else waiter={p,resolve};}),
+      keyboard:{press:async()=>{const request={url:()=> 'https://www.douyin.com/aweme/v1/web/comment/publish/',method:()=> 'POST',postData:()=>`aweme_id=${target}&text=hello`};
+        await gate({request:()=>request,abort:async()=>{},continue:async()=>{sends++;const response={url:request.url,request:()=>request,json:async()=>({status_code:0,comment:{cid:message,aweme_id:target,user:{uid:account},reply_id:'0'}})};if(waiter?.p(response))waiter.resolve(response);}});}}};
+    const browser=createBrowserTransport({config:{douyin:{chromePath:'fake'}},stateDir:dir,chromium:{launchPersistentContext:async()=>({pages:()=>[page],close:async()=>{}})}});
+    const result: any=await browser.write({action:'comment',targetId:target,text:'hello'});
+    if(scenario.expect.confirmed) {assert.equal(result.confirmed,true,'one visible match among hidden duplicates must submit');assert.equal(sends,1);}
+    else {assert.equal(result.code,scenario.expect.code);assert.equal(result.state,'refused');assert.equal(sends,0);assert.equal(result.control?.count,scenario.count);assert.equal(result.control?.visibleCount,scenario.visible);}
+    await browser.close();
+  }
+});
+
+test('headed browser launches with a wide, maximized window so header entries stay visible',async()=>{
+ const {browserLaunchArgs,desktopWindowArgs}=await import('../src/platforms/douyin/transport.mjs');
+ assert.deepEqual(browserLaunchArgs({headless:false,backend:'x11'}),['--ozone-platform=x11','--window-size=1600,1000','--start-maximized']);
+ assert.deepEqual(browserLaunchArgs({headless:true,backend:'x11'}),['--disable-gpu']);
+ assert.ok(desktopWindowArgs.every((a)=>typeof a==='string'));
+});

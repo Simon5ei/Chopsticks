@@ -256,8 +256,22 @@ test('abort propagates during fetch and during a stalled response body', async (
 test('engine deadlines fail bounded requests even if transport ignores cancellation', async (t?: any) => {
   t.mock.timers.enable({apis:['setTimeout']});
   const pending = call(()=>new Promise<any | void>(()=>{}),{engines:['iqdb']});
-  t.mock.timers.tick(30_000);
+  t.mock.timers.tick(45_000);
   const result = await pending;
   assert.equal(result.engines[0].status,'failed');
   assert.equal(result.engines[0].error,'TIMEOUT');
+});
+
+test('a fast transient transport failure is retried once per engine',async()=>{
+ let failures=0;
+ const r: any=await call(async (url?: any)=>{
+  if(failures<3){failures++;throw new TypeError('fetch failed');}
+  return url.includes('saucenao')?response(sauce()):url.includes('trace')?response(trace(),'application/json'):response(iqdb());
+ });
+ assert.equal(failures,3);assert.deepEqual(r.engines.map((e?: any)=>e.status),['ok','ok','ok']);
+});
+
+test('a reset TLS connection is reported as a network failure instead of a generic error',async()=>{
+ const r: any=await call(async ()=>{const e=new TypeError('fetch failed');(e as any).cause={code:'ECONNRESET'};throw e;});
+ assert.deepEqual(r.engines.map((e?: any)=>e.error),['NETWORK_UNAVAILABLE','NETWORK_UNAVAILABLE','NETWORK_UNAVAILABLE']);
 });

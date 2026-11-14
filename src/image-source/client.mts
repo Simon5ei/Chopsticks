@@ -78,10 +78,13 @@ async function readBounded(response?: any, signal?: any) {
 }
 
 async function request(engine?: any, bytes?: any, mimeType?: any, fetchImpl?: any, signal?: any) {
-  const response = await fetchImpl(ENDPOINTS[engine], {
+  let response;
+  try{
+   response = await fetchImpl(ENDPOINTS[engine], {
     method:'POST', body:uploadForm(engine,bytes,mimeType), redirect:'error', signal,
     headers:{Accept:engine === 'tracemoe' ? 'application/json' : 'text/html'},
   });
+  }catch(error){const cause=String(error?.cause?.code||'');if(/ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR/i.test(cause))throw new Failure('NETWORK_UNAVAILABLE');throw error;}
   if (signal.aborted) { void response.body?.cancel().catch(() => {}); throw new Failure('TIMEOUT'); }
   if (!response.ok || response.redirected || (response.url && response.url !== ENDPOINTS[engine])) {
     void response.body?.cancel().catch(() => {});
@@ -101,12 +104,24 @@ async function request(engine?: any, bytes?: any, mimeType?: any, fetchImpl?: an
   }
 }
 
+// A fast transport failure is usually a transient DNS/TLS hiccup; one bounded
+// retry keeps the search usable. Slow failures (timeouts) are never retried.
+async function requestWithRetry(engine?: any,bytes?: any,mimeType?: any,fetchImpl?: any,signal?: any){
+ const started=Date.now();
+ try{return await request(engine,bytes,mimeType,fetchImpl,signal);}
+ catch(error){const code=error instanceof Failure?error.code:'REQUEST_FAILED';
+  if(signal?.aborted||!['REQUEST_FAILED','NETWORK_UNAVAILABLE'].includes(code)||Date.now()-started>5000)throw error instanceof Failure?error:new Failure('REQUEST_FAILED');
+  return request(engine,bytes,mimeType,fetchImpl,signal);}
+}
 async function oneEngine(engine: any, bytes: any, mimeType: any, fetchImpl: any, parentSignal: any, userSignal: any, {lensSearch, lens}: { lensSearch?: any; lens?: any; [key: string]: any }) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   parentSignal.addEventListener('abort', abort, {once:true});
   if (parentSignal.aborted) abort();
-  const deadline = engine === 'lens' ? 40_000 : 30_000;
+  // iqdb uploads are consistently slower than the other engines; give it its own
+  // budget instead of making every engine wait for the slowest.
+  const DEADLINES: Record<string, number> = {saucenao:30_000,tracemoe:30_000,iqdb:45_000,lens:40_000};
+  const deadline = DEADLINES[engine] ?? 30_000;
   const timer = setTimeout(abort, deadline);
   let onAbort;
   const cancelled = new Promise<any | void>((_?: any,reject?: any) => {
@@ -118,7 +133,7 @@ async function oneEngine(engine: any, bytes: any, mimeType: any, fetchImpl: any,
     const matches = await Promise.race([
       engine === 'lens'
         ? lensSearch(bytes, mimeType, {...lens, signal: controller.signal, timeoutMs: Math.min(deadline - 1000, lens?.timeoutMs ?? 40_000)})
-        : request(engine,bytes,mimeType,fetchImpl,controller.signal),
+        : requestWithRetry(engine,bytes,mimeType,fetchImpl,controller.signal),
       cancelled,
     ]);
     return {matches, summary:{engine,status:'ok',count:matches.length}};
@@ -157,7 +172,7 @@ export async function searchAnimeImage(bytes?: any, mimeType?: any, {engines=[..
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort',abort,{once:true});
-  const timer = setTimeout(abort,45_000);
+  const timer = setTimeout(abort,60_000);
   try {
     // Small images start every engine synchronously, exactly as before.
     const upload = bytes.length > REDUCE_OVER ? await reduceForUpload(bytes,mimeType,compress,controller.signal) : {bytes,mimeType};

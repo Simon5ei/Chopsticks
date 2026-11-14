@@ -16,7 +16,38 @@ function validConversation(value?: any,account?: any,target?: any){const m=typeo
 function validPeer(request?: any,account?: any,target?: any,text?: any,expected?: any){return request.conversationType===1&&validConversation(request.conversationId,account,target)&&(expected===undefined||request.conversationId===expected)&&request.text===text&&!!request.clientMessageId;}
 function commentRequest(request?: any,target?: any,parent?: any,text?: any){const u=new URL(request.url()),body=new URLSearchParams(request.postData()||'');const values=(k)=>[...u.searchParams.getAll(k),...body.getAll(k)];const targetValues=[...values('aweme_id'),...values('item_id')];const parents=values('reply_to_reply_id').filter((x)=>x!=='0');const p=parents.length?parents:values('reply_id');return targetValues.length>0&&targetValues.every((x)=>x===target)&&p.length>0&&p.every((x)=>x===parent)&&values('text').length===1&&values('text')[0]===text;}
 
-export async function advancedWrite({p,input,identity,receipts}: { p?: any; input?: any; identity?: any; receipts?: any; [key: string]: any }) {
+// Production inbox rows are marked data-e2e="conversation-item" with the peer name
+// inside .conversationConversationItemtitle; the older class-only selector is kept
+// as a fallback. Matching is read-only: title first, then a plain text match.
+export const CONVERSATION_ROWS='[data-e2e="conversation-item"], [class*="conversationConversationItemwrapper"]';
+export function conversationRowLocator(p?: any){return p.locator(CONVERSATION_ROWS).filter({visible:true});}
+export function titledPeerLocator(p?: any,nickname?: any){return conversationRowLocator(p).filter({has:p.locator('.conversationConversationItemtitle').getByText(nickname,{exact:true})});}
+// Peer rows may be virtualized or the list may not scroll to the target on its
+// own. Search the panel by nickname before declaring the peer invisible; this is
+// a read-only filter, never a send.
+export async function locatePeerConversation({p,nickname,initialMs=1200,settleMs=5000}: { p?: any; nickname?: any; initialMs?: number; settleMs?: number }){
+ const matches=async()=>{const titled=titledPeerLocator(p,nickname);if(await titled.count())return titled;return conversationRowLocator(p).filter({hasText:nickname});};
+ let rows=await matches();
+ try{await rows.first().waitFor({state:'visible',timeout:initialMs});}catch{}
+ if(await rows.count())return {found:true,searched:false,rows};
+ // A cold page renders the conversation list a few seconds after the panel opens.
+ // Wait for any row before spending the search round-trip.
+ try{await conversationRowLocator(p).first().waitFor({state:'visible',timeout:8000});}catch{}
+ rows=await matches();
+ if(await rows.count())return {found:true,searched:false,rows};
+ const search=p.locator('[data-e2e="im-search-input"], input[placeholder*="搜索"]').first();
+ try{if(await search.count()===1&&await search.isVisible()){await search.fill(nickname);await p.waitForTimeout(600);}}catch{}
+ rows=await matches();
+ try{await rows.first().waitFor({state:'visible',timeout:settleMs});}catch{
+  // The panel can render the peer's name outside the row wrappers (virtualized or
+  // nested layout). Accept a single, visible exact text match as the peer.
+  try{const text=p.getByText(nickname,{exact:true}).filter({visible:true});const n=await text.count();if(n){let index=-1;try{index=await text.evaluateAll((els, name)=>els.findIndex((el)=>String(el.textContent||'').trim()===name&&!!el.closest('[class*="conversation"],[data-e2e*="conversation"]')),nickname);}catch{}if(index>=0)return {found:true,searched:true,count:1,rows:text.nth(index),viaText:true};if(n===1)return {found:true,searched:true,count:1,rows:text,viaText:true};}}catch{}
+  const legacy=await p.locator('[class*="conversationConversationItemwrapper"]').count().catch(()=>0),e2e=await p.locator('[data-e2e="conversation-item"]').count().catch(()=>0);
+  let textMatches=-1;try{textMatches=await p.getByText(nickname,{exact:true}).filter({visible:true}).count();}catch{}
+  return {found:false,searched:true,count:0,rows,evidence:{legacy,e2e,textMatches}};}
+ const count=await rows.count();return {found:count>0,searched:true,count,rows};
+}
+export async function advancedWrite({p,input,identity,receipts,report}: { p?: any; input?: any; identity?: any; receipts?: any; report?: any; [key: string]: any }) {
   const {action,targetId,parentId,text,context={}}=input;let attempted=false,accepted,dmPhase='IDENTITY';
   try {
     if(typeof text!=='string'||!text.trim())return refused('INVALID_INPUT');
@@ -51,16 +82,16 @@ export async function advancedWrite({p,input,identity,receipts}: { p?: any; inpu
       if(data?.status_code!==0||id(data.user?.uid)!==targetId||data.user.sec_uid!==context.secUid)return refused('TARGET_UNVERIFIED');
       // Wait for the actual conversation row. A cached IM panel need not issue
       // another initialization request; that request is not send authorization.
-      if(!await p.locator('[class*="conversationConversationItemwrapper"]').filter({visible:true}).count()){
+      if(!await conversationRowLocator(p).count()){
         dmPhase='IM_ENTRY';
-        const entry=p.locator('[data-e2e="im-entry"]');await entry.waitFor({state:'visible',timeout:5000});
+        const entry=p.locator('[data-e2e="im-entry"]');await entry.waitFor({state:'visible',timeout:15000});
         if(!await unique(entry))return refused('CONTROL_NOT_UNIQUE');await entry.click();
       }
       const editor=p.locator('[data-e2e="msg-input"] .editor-kit-container[contenteditable="true"]');
-      if(typeof data.user.nickname!=='string'||!data.user.nickname)return refused('PEER_NOT_VISIBLE');
-      dmPhase='PEER';const conversation=p.locator('[class*="conversationConversationItemwrapper"]').filter({hasText:data.user.nickname,visible:true});
-      try{await conversation.first().waitFor({state:'visible',timeout:5000});}catch(e){if(e?.name==='TimeoutError')return refused('PEER_NOT_VISIBLE');throw e;}
-      if(!await unique(conversation))return refused('PEER_NOT_UNIQUE');await conversation.click();
+      if(typeof data.user.nickname!=='string'||!data.user.nickname){try{await report?.({evt:'dm_peer_miss',branch:'no_nickname',statusCode:data?.status_code});}catch{}return refused('PEER_NAME_MISSING');}
+      dmPhase='PEER';const located=await locatePeerConversation({p,nickname:data.user.nickname});
+      if(!located.found){try{await report?.({evt:'dm_peer_miss',branch:'rows',searched:located.searched===true,...(located.evidence?{legacy:located.evidence.legacy,e2e:located.evidence.e2e,textMatches:located.evidence.textMatches}:{})});}catch{}return {...refused('PEER_NOT_VISIBLE'),...(located.evidence?{rows:located.evidence}:{})};}
+      const conversation=located.rows;if(!await unique(conversation))return refused('PEER_NOT_UNIQUE');await conversation.click();
       dmPhase='EDITOR';await editor.waitFor({state:'visible',timeout:10000});
       if(!await unique(editor))return refused('CONTROL_NOT_UNIQUE');await editor.fill(text);
       const result=await guardedSubmit({page:p,host:'imapi.douyin.com',path:'/v1/message/send',validate:async (r?: any) =>validPeer(decodeImRequest(r.postDataBuffer()),account,targetId,text,context.conversationId)&&await identity(p)===account,submit:async()=>{attempted=true;await p.keyboard.press('Enter');}});

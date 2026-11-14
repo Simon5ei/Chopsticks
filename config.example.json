@@ -23,6 +23,14 @@
     ],
     "denyUsers": []
   },
+  "bugPipeline": {
+    "enabled": false,
+    "sessionId": ""
+  },
+  "privacy": {
+    "ownerAliases": [],
+    "ownerDetails": []
+  },
   "development": {
     "enabled": true,
     "workspace": "/root/workspace/dsh"

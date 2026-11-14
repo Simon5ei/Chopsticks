@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FISH_HOME, BILI_CONFIG } from './state-paths.mjs';
 import { findIdentityLeaks, formatIdentityLeakError } from './identity-guard.mjs';
+import {assertOwnerPrivacy} from '../../host/owner-privacy.mjs';
 
 function readJson(file?: any, fallback: any = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -58,6 +59,7 @@ export function collectProtectedIdentities({ surfcoreDir = FISH_HOME }: { surfco
  * @param {{surface?:string, surfcoreDir?:string, ids?:string[]}} options
  */
 export function assertOutboundIdentitySafe(text?: any, { surface = 'B站 内容', surfcoreDir, ids }: { surface?: string; surfcoreDir?: any; ids?: any; [key: string]: any } = {}) {
+  assertOwnerPrivacy(text,{config:{fishHome:surfcoreDir||FISH_HOME},channel:'bili:public'});
   const protectedIds = Array.isArray(ids) ? ids : collectProtectedIdentities({ surfcoreDir });
   const hits = findIdentityLeaks(text, { ids: protectedIds });
   if (!hits.length) return { ok: true, hits };

@@ -271,3 +271,14 @@ test('Bili subtitles only report evidence from the bound video subtitle artifact
   assert.equal(actual.structuredContent?.observation?.kind,'subtitles');
   assert.match(actual.content[0].text,/真正字幕/);
 });
+
+test('inbox failures are classified into distinguishable non-private codes',async()=>{
+ const {inboxFailureCode}=await import('../src/host/inbox-failure.mjs');
+ assert.equal(inboxFailureCode(Object.assign(new Error('request timed out'),{code:'ETIMEDOUT'})),'inbox_timeout');
+ assert.equal(inboxFailureCode(Object.assign(new Error('HTTP 429 too many requests'),{})),'inbox_rate_limited');
+ assert.equal(inboxFailureCode(Object.assign(new Error('HTTP 403 forbidden'),{})),'inbox_auth_required');
+ assert.equal(inboxFailureCode(Object.assign(new Error('fetch failed ENOTFOUND api.bilibili.com'),{})),'inbox_network_error');
+ assert.equal(inboxFailureCode(Object.assign(new Error('502 bad gateway'),{})),'inbox_platform_unavailable');
+ assert.equal(inboxFailureCode(Object.assign(new Error('unknown'),{name:'AbortError'})),'inbox_aborted');
+ assert.equal(inboxFailureCode(new Error('mystery')),'inbox_unavailable');
+});

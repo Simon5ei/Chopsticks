@@ -12,7 +12,7 @@ function usageFor(engines?: any) {
   return `请引用或附上一张图片，发送 /鱼鱼找鸡。也可指定 ${engines.join('、')}。`;
 }
 function reasonLabel(code?: any) {
-  return ({TIMEOUT:'超时',GOOGLE_CAPTCHA:'需要谷歌验证',GOOGLE_UNREACHABLE:'谷歌连不上',BROWSER_UNAVAILABLE:'浏览器不可用',INVALID_FORMAT:'格式异常',UPSTREAM_BUSY:'上游繁忙'})[code] ?? '失败';
+  return ({TIMEOUT:'超时',GOOGLE_CAPTCHA:'需要谷歌验证',GOOGLE_UNREACHABLE:'谷歌连不上',BROWSER_UNAVAILABLE:'浏览器不可用',INVALID_FORMAT:'格式异常',UPSTREAM_BUSY:'上游繁忙',NETWORK_UNAVAILABLE:'网络被重置'})[code] ?? '失败';
 }
 function format(result?: any) {
   const candidates = result.matches.map((m)=>({

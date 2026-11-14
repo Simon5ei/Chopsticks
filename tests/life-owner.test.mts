@@ -30,9 +30,9 @@ test('operator DM rejects non-operators, changed command payloads and arbitrary 
 test('operator DM retains uncertain outcomes and cannot replay with a changed intent label',async (t?: any) =>{
  const f=directFixture(t,{receipt:{confirmed:false,state:'uncertain',code:'UNVERIFIED_RECEIPT'}});await assert.rejects(f.run());await assert.rejects(f.run());await assert.rejects(f.run({intentId:'admin-test-2'}));assert.equal(f.calls.length,1);assert.equal(f.events.length,0);
 });
-function fixture(t?: any,{read,write,scope='public',time=Date.parse('2026-11-05T01:00:00Z')}: { read?: any; write?: any; scope?: string; time?: any; [key: string]: any }={}){
+function fixture(t?: any,{read,write,status,scope='public',time=Date.parse('2026-11-05T01:00:00Z')}: { read?: any; write?: any; status?: any; scope?: string; time?: any; [key: string]: any }={}){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'life-owner-'));const store=createEventStore({stateDir:dir});const state=createHostState(store);let calls=0;const events=[];
- const platform={platform:'heybox',capabilities:{feed:true,detail:true,like:true,comment:true,publish:true},status:async()=>({state:'ready',capabilities:{feed:true,detail:true,like:true,comment:true,publish:true}}),read:read|| (async()=>({items:[{id:'a',text:'hello',kind:'post',visibility:'public'}],truncated:false,warnings:[]})),write:async (a?: any) =>{calls++;return write?write(a):{confirmed:true,platformId:'receipt',targetId:a.targetId,kind:a.action,visibility:'public'};},close:async()=>{}};
+ const platform={platform:'heybox',capabilities:{feed:true,detail:true,like:true,comment:true,publish:true},status:status||(async()=>({state:'ready',capabilities:{feed:true,detail:true,like:true,comment:true,publish:true}})),read:read|| (async()=>({items:[{id:'a',text:'hello',kind:'post',visibility:'public'}],truncated:false,warnings:[]})),write:async (a?: any) =>{calls++;return write?write(a):{confirmed:true,platformId:'receipt',targetId:a.targetId,kind:a.action,visibility:'public'};},close:async()=>{}};
  const binding={platform:'heybox',scope,channel:scope==='public'?'heybox:public':'qzone:friends',eventId:'source',requestId:'request',targetId:'a'};
  const owner=createLifeOwner({config:{stateDir:dir,heybox:{enabled:true}},state,store,platforms:{heybox:platform},authorize:()=>binding,onEvent:(e)=>{events.push(e);return store.append(e);},now:()=>time});
  t.after(async()=>{await owner.close();store.close();fs.rmSync(dir,{recursive:true,force:true});});return {owner,events,state,store,get calls(){return calls;},binding,advance(ms?: any){time+=ms;}};
@@ -48,6 +48,31 @@ test('detail URL resolves only the canonical source target and rejects conflicti
 test('actual operation failure is available to watchdog without private content',async (t?: any) =>{
  const f=fixture(t,{read:async()=>({items:[],truncated:true,warnings:['verification_required']})});await f.owner.handle({platform:'heybox',operation:'read',args:{ticket:'t',action:'detail',id:'a'}});
  assert.equal(f.state.get('health','life-operation:heybox:detail').state,'verification_required');
+});
+
+test('deterministic write failure pauses the operation across new sources and intent labels',async t=>{
+ const f=fixture(t,{write:()=>({confirmed:false,state:'refused',code:'CONTROL_NOT_UNIQUE'})});
+ const run=(n)=>f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'ticket'+n,action:'comment',targetId:'a',text:'hello'+n,intentId:'intent'+n}});
+ assert.equal((await run(1)).code,'CONTROL_NOT_UNIQUE');f.binding.eventId='another';f.binding.requestId='another';
+ assert.equal((await run(2)).code,'OPERATION_HELD');assert.equal(f.calls,1);assert.equal(f.state.get('operation-hold','heybox:comment').code,'CONTROL_NOT_UNIQUE');
+});
+
+test('verification-required without a code is visible and prevents blind new-intent writes',async t=>{
+ const f=fixture(t,{write:()=>({confirmed:false,state:'verification_required'})});
+ const run=(n)=>f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'t',action:'comment',targetId:'a',text:'hello'+n,intentId:'intent'+n}});
+ await run(1);assert.equal(f.state.get('health','life-operation:heybox:comment').state,'verification_required');
+ assert.equal((await run(2)).code,'OPERATION_HELD');assert.equal(f.calls,1);
+});
+
+test('platform readiness retires a resolved verification hold so a fresh intent is not blocked forever',async t=>{
+ let verified=false,attempts=0;
+ const f=fixture(t,{status:async()=>({state:verified?'ready':'verification_required',capabilities:{feed:true,detail:true,like:true,comment:true,publish:true}}),write:()=>{attempts++;return verified?{confirmed:true,platformId:'receipt',targetId:'a',kind:'comment',visibility:'public'}:{confirmed:false,state:'verification_required'};}});
+ const run=(n)=>f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'ticket'+n,action:'comment',targetId:'a',text:'hello'+n,intentId:'intent'+n}});
+ await run(1);assert.equal(f.state.get('operation-hold','heybox:comment').code,'verification_required');
+ assert.equal((await run(2)).code,'OPERATION_HELD');assert.equal(attempts,1);
+ verified=true;await f.owner.handle({platform:'heybox',operation:'status',args:{}});
+ assert.notEqual(f.state.get('operation-hold','heybox:comment')?.active,true,'readiness must retire a resolved verification hold');
+ assert.equal((await run(3)).confirmed,true);assert.equal(attempts,2);
 });
 
 test('unknown write retains safe accepted ID and operation health without enabling replay',async (t?: any) =>{
@@ -144,4 +169,12 @@ test('confirmed receipt after cancellation is still persisted and not resent',as
  let entered,complete;const started=new Promise<any | void>((r)=>entered=r);const f=fixture(t,{write:()=>{entered();return new Promise<any | void>((r)=>complete=r);}});
  const req={platform:'heybox',operation:'write',args:{ticket:'t',action:'comment',targetId:'a',text:'late receipt',intentId:'i'}};const c=new AbortController();const first=f.owner.handle(req,{signal:c.signal});await started;c.abort();complete({confirmed:true,platformId:'stable-receipt',targetId:'a',kind:'comment',visibility:'public'});
  const receipt: any=await first;assert.equal(receipt.confirmed,true);const again=await f.owner.handle(req);assert.deepEqual(again,receipt);assert.equal(f.calls,1);assert.equal(f.events.length,1);
+});
+
+test('an unresolved send stays on the health surface after later successes',async t=>{
+ const f=fixture(t,{write:()=>({confirmed:false,state:'uncertain',code:'SUBMISSION_UNKNOWN'})});
+ await f.owner.handle({platform:'heybox',operation:'write',args:{ticket:'t1',action:'comment',targetId:'a',text:'one',intentId:'i1'}}).catch(()=>{});
+ assert.equal(f.state.get('life-unresolved','heybox:comment').code,'SUBMISSION_UNKNOWN');
+ const view=await f.owner.status();
+ assert.equal(view.heybox.unresolved[0].code,'SUBMISSION_UNKNOWN');
 });

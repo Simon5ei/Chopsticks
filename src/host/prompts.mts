@@ -12,6 +12,8 @@ import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {createPromptRegistry} from './prompt-registry.mjs';
 import {SOCIAL_REPLY_RULE} from './social-policy.mjs';
+import {OWNER_PRIVACY_RULE} from './owner-privacy.mjs';
+import {BUG_REPORT_RULE} from './bug-pipeline.mjs';
 
 const text = (value: string) => ({text: value});
 const runtime = (slot: string, extra: Record<string, any> = {}) => ({slot, kind: 'runtime', ...extra});
@@ -19,6 +21,9 @@ const flag = (slot: string, value: string) => ({slot, options: {yes: value}, opt
 
 const DEFINITIONS: any[] = [
   {id: 'social.reply-rule', node: 'router', title: '社交回复总则', source: 'src/host/social-policy.mts', kind: 'static', text: SOCIAL_REPLY_RULE},
+  // Both rules below also go into every native system prompt as the `chopsticks-safety` context (src/host/index.mts).
+  {id: 'privacy.owner-rule', node: 'session', title: '主人隐私规则', source: 'src/host/owner-privacy.mts', kind: 'static', text: OWNER_PRIVACY_RULE},
+  {id: 'bug.report-rule', node: 'session', title: '缺陷上报规则', source: 'src/host/bug-pipeline.mts', kind: 'static', text: BUG_REPORT_RULE},
 
   // ---- Router ----
   {id: 'router.platform-select', node: 'router', title: 'Router：在领域内选平台', source: 'src/host/runtime.mts', parts: [
@@ -53,6 +58,10 @@ const DEFINITIONS: any[] = [
   {id: 'dispatch.respond', node: 'session', title: '派发：交给平台会话处理', source: 'src/host/runtime.mts', parts: [
     text('【角色】\n'),
     {slot: 'persona', kind: 'config', optional: true, ref: 'persona.character'},
+    text('\n'),
+    {include: 'privacy.owner-rule'},
+    text('\n'),
+    {include: 'bug.report-rule'},
     text('\n'),
     {include: 'social.reply-rule'},
     text('\n'),
@@ -178,7 +187,7 @@ const DEFINITIONS: any[] = [
       watchdog: '诊断健康快照和问题变化；operator-maintained 来源是管理员维护的故障资料，confirmedFacts 是登记事实，hypotheses 是待验证猜测，recovery 仅是建议而非执行授权；保留这些界限并结合本轮快照判断，不把旧故障当作当前仍发生；只提建议，不重放消息、重启服务、执行命令或修改代码。',
       reflection: '审视真实做过的事、表达效果及可改进的假设，不把计划、浏览候选当经历。',
     }},
-    text('所有输出仅内部保存，不向外发布，不替代管理员开发授权。每个事实和假设都提供本轮 sourceEventIds。普通文字不代表保存成功。\n本轮来源：'),
+    text('发现可修复的问题时，在报告 problems 中提供最多5个 {component,code,summary,sourceEventIds}，component 使用 runtime/qq/bili/heybox/douyin/qzone/memory/routing/tools/privacy/other，code 用稳定错误码；宿主会按管理员规则投递开发会话。私有范围只写通用机制问题，不复制主人信息或私聊。所有输出仅内部保存，不向外发布；报告者自己没有执行修复权限。每个事实和假设都提供本轮 sourceEventIds。普通文字不代表保存成功。\n本轮来源：'),
     runtime('sources', {optional: true}),
   ]},
 
@@ -224,6 +233,7 @@ export const EXTERNAL_PROMPT_SOURCES = Object.freeze([
   {title: 'DSH 内置系统提示词与压缩提示词', reason: '由 DSH 运行时拼装，宿主拿不到文本'},
   {title: '外部 MCP 服务的工具描述', reason: '桌面操作、联网检索等工具由各自的服务进程提供描述'},
   {title: '平台 MCP（QQ、B 站、抖音、小黑盒、QQ 空间）的 status / read / write 描述', reason: '由平台子进程注册，尚未接入注册表'},
+  {title: '缺陷修复管线发给开发会话的批次提示', reason: '写在 src/host/bug-pipeline.mts，尚未接入注册表'},
   {title: '宿主合成的事件正文', reason: '定时器、提醒、阅读证据等事件文本作为事件数据进入上下文，尚未接入注册表'},
 ]);
 

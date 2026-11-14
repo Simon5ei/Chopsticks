@@ -1,6 +1,6 @@
 // Narrow Playwright implementation, derived from the MIT-licensed upstream selectors
 // and XHR response conventions documented in notices/douyin-MIT-LICENSE.
-import { mkdir, chmod } from 'node:fs/promises';
+import { mkdir, chmod, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { decodeInbox } from './im-wire.mjs';
 export {decodeImRequest,decodeImResponse,decodeInbox} from './im-wire.mjs';
@@ -11,6 +11,11 @@ import {publisherDiagnostics} from './publish-diagnostics.mjs';
 import {sampleVisibleContent} from './observation.mjs';
 import {dmDiagnostics} from './dm-diagnostics.mjs';
 
+// A narrow window hides the site's header entries (the IM entry disappears at
+// ~1280px), which made DM delivery fail with PEER_NOT_VISIBLE on a real 1920
+// display. Headed sessions always ask for a wide, maximized window.
+export const desktopWindowArgs=['--window-size=1600,1000','--start-maximized'];
+export function browserLaunchArgs({headless,backend}: { headless?: boolean; backend?: string }={}){return headless?['--disable-gpu']:[`--ozone-platform=${backend}`,...desktopWindowArgs];}
 export function createBrowserTransport({config,stateDir,chromium: injectedChromium}: { config?: any; stateDir?: any; chromium?: any; [key: string]: any }) {
   let context, page, generation=0;
   const privateDir=resolve(stateDir);
@@ -26,7 +31,7 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
     const headless=config?.douyin?.headless!==false;
     const browserBackend=config?.douyin?.browserBackend??'wayland';
     if(!headless&&!['wayland','x11'].includes(browserBackend))throw new Error('browser backend unavailable');
-    const args=headless?['--disable-gpu']:[`--ozone-platform=${browserBackend}`];
+    const args=headless?['--disable-gpu']:[`--ozone-platform=${browserBackend}`,...desktopWindowArgs];
     const launched=await chromium.launchPersistentContext(join(privateDir,'profile'),{executablePath,headless,args,timeout:30000});
     if (generation!==expectedGeneration) {await launched.close();throw new Error('cancelled');}
     context=launched;
@@ -72,7 +77,7 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
       return {state:'waiting',qrImagePath};
     },
     async write({action,targetId,parentId,text,context:writeContext}: { action?: any; targetId?: any; parentId?: any; text?: any; context?: any; [key: string]: any }) {
-      if(['reply','dm','publish'].includes(action))return advancedWrite({p:await ensure(),input:{action,targetId,parentId,text,context:writeContext},identity,receipts:{comment:confirmCommentReceipt,dm:confirmDmReceipt,publish:confirmPublishReceipt}});
+      if(['reply','dm','publish'].includes(action)){const report=async(data?: any)=>{try{const target=join(privateDir,'dm-diagnostic.json');await writeFile(target,JSON.stringify(data).slice(0,2000),{mode:0o600});await chmod(target,0o600);}catch{}};return advancedWrite({p:await ensure(),input:{action,targetId,parentId,text,context:writeContext},identity,receipts:{comment:confirmCommentReceipt,dm:confirmDmReceipt,publish:confirmPublishReceipt},report});}
       const refused=(code)=>({confirmed:false,state:'refused',code});
       let submitted=false;
       try {
@@ -89,7 +94,17 @@ export function createBrowserTransport({config,stateDir,chromium: injectedChromi
         };
         const before=await detail(); if(!before) return refused('TARGET_UNVERIFIED');
         const selector=action==='comment'?"[data-e2e='comment-input'][contenteditable='true'], div[contenteditable='true'][data-e2e*='comment'], textarea[data-e2e='comment-input']":"[data-e2e='video-player-digg']";
-        const control=p.locator(selector); if(await control.count()!==1 || !await control.isVisible()) return refused('CONTROL_NOT_UNIQUE');
+        const candidates=p.locator(selector);let control=candidates;
+        if(action==='comment') {
+          const total=await candidates.count();
+          if(!Number.isInteger(total)||total<0||total>10000)return refused('CONTROL_NOT_UNIQUE');
+          const visible=total?await candidates.filter({visible:true}).count():0;
+          const refusal=(code)=>({...refused(code),deliveryState:'not_sent',submitted:false,phase:'comment_control',control:{count:total,visibleCount:visible}});
+          if(!total)return refusal('CONTROL_NOT_FOUND');
+          if(!visible)return refusal('CONTROL_NOT_VISIBLE');
+          if(visible!==1)return refusal('CONTROL_AMBIGUOUS');
+          control=candidates.filter({visible:true});
+        } else if(await candidates.count()!==1 || !await candidates.isVisible()) return refused('CONTROL_NOT_UNIQUE');
         if(action==='like' && before.user_digged!==0) return refused('LIKE_STATE_NOT_UNLIKED');
         if(action==='comment') {if(typeof text!=='string' || !text.trim() || text.length>500)return refused('INVALID_INPUT');await control.click();await control.fill(text);}
         if(stableId(await identity(p))!==account) return refused('ACCOUNT_CHANGED');

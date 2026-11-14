@@ -57,3 +57,14 @@ test('Douyin MCP sends the verified frame as image content and keeps base64 out 
  assert.ok(!result.content[0].text.includes(data));
  assert.deepEqual(result.content[1],{type:'image',mimeType:'image/jpeg',data});
 });
+
+test('a refused platform call returns a bounded reason code instead of one opaque sentence',async (t?: any) =>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'life-mcp-fail-'));const socketPath=process.platform==='win32'?`\\\\.\\pipe\\life-${randomUUID()}`:path.join(dir,'life','platform.sock');
+ const config=path.join(dir,'config.json');await fs.writeFile(config,JSON.stringify({stateDir:dir,life:{socketPath}}));
+ const bridge=createPlatformBridge({socketPath,handle:async()=>{throw Object.assign(Error('ticket expired'),{code:'TICKET_REJECTED'});}});await bridge.start();
+ const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../src/life/mcp.mjs',import.meta.url)),'--platform','qq'],env:{...process.env,CHOPSTICKS_CONFIG:config},stderr:'pipe'});const client=new Client({name:'fixture',version:'1'});
+ t.after(async()=>{await client.close();await bridge.close();await fs.rm(dir,{recursive:true,force:true});});await client.connect(transport);
+ const result=await client.callTool({name:'qq_read',arguments:{ticket:'t',action:'feed'}});
+ assert.equal(result.isError,true);const body=JSON.parse(result.content[0].text);
+ assert.equal(body.code,'TICKET_REJECTED');assert.equal(body.ok,false);assert.doesNotMatch(result.content[0].text,/expired/i);
+});

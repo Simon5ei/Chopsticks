@@ -6,7 +6,7 @@ import {createDouyinPlatform} from '../src/platforms/douyin/index.mjs';
 
 function fixture(peers: number=1){
  const calls=[];
- const make=(kind?: any,count?: any)=>({count:async()=>count,isVisible:async()=>true,first(){return this;},and(){return this;},filter(){return this;},waitFor:async (o?: any) =>assert.ok(o.timeout<=5000),click:async()=>calls.push(kind),evaluateAll:async()=>[{tag:'DIV',class:'editor-kit-container',role:'textbox',e2e:'im-editor',ancestors:[{tag:'DIV',class:'message-dialog'}]}]});
+ const make=(kind?: any,count?: any)=>({count:async()=>count,isVisible:async()=>true,first(){return this;},and(){return this;},filter(){return this;},waitFor:async (o?: any) =>assert.ok(o.timeout<=15000),click:async()=>calls.push(kind),evaluateAll:async()=>[{tag:'DIV',class:'editor-kit-container',role:'textbox',e2e:'im-editor',ancestors:[{tag:'DIV',class:'message-dialog'}]}]});
  const page={goto:async (url?: any) =>calls.push(url),locator:(s)=>make(s.includes('im-entry')?'entry':s.includes('conversationConversation')?'legacy':'editor',s.includes('conversationConversation')?0:1),getByText:(name?: any,o?: any)=>{assert.equal(name,'Fixture peer');assert.equal(o.exact,true);return make('peer',peers);}};
  return {calls,page};
 }
@@ -48,4 +48,15 @@ test('an unavailable IM entry reports bounded layout evidence without any click'
  const f: any=fixture();f.page.locator=()=>({first(){return this;},waitFor:async()=>{throw Object.assign(Error('timeout'),{name:'TimeoutError'});}});
  (f.page as any).evaluate=async()=>({viewportWidth:1280,windowWidth:1256,screenWidth:1920,entryPresent:true,entryWidth:0,entryHeight:0,entryDisplay:'none',entryVisibility:'hidden',documentState:'complete',secret:'private'});
  const r: any=await diagnostics.dmDiagnostics(f.page,{peerName:'Fixture peer'});assert.equal(r.kind,'dm_controls');assert.equal(r.state,'unavailable');assert.equal(r.layout.entryDisplay,'none');assert.equal(r.layout.viewportWidth,1280);assert.ok(!JSON.stringify(r).includes('private'));assert.deepEqual(f.calls,['https://www.douyin.com/']);
+});
+
+test('structure-only dm diagnostics need no nickname and expose only mechanical row markers',async()=>{
+ const {validDmDiagnostic,sanitizeDiagnostics}=await import('../src/platforms/douyin/dm-diagnostics.mjs');
+ assert.equal(validDmDiagnostic({action:'dm_controls'}),true);
+ assert.equal(validDmDiagnostic({action:'dm_controls',peerName:''}),false);
+ assert.equal(validDmDiagnostic({action:'dm_controls',peerName:'x'.repeat(81)}),false);
+ assert.equal(validDmDiagnostic({action:'dm_controls',targetId:'123456',secUid:'MS4wLjABAAAAx'}),true);
+ const out=sanitizeDiagnostics({kind:'dm_controls',state:'observed',e2eRowRows:3,legacyRows:0,e2eNames:['conversation-item','im-entry','bad name!','x'.repeat(70)]});
+ assert.equal(out.e2eRowRows,3);assert.deepEqual(out.e2eNames,['conversation-item','im-entry']);
+ assert.equal(sanitizeDiagnostics({kind:'dm_controls',state:'observed',text:'private'}).text,undefined);
 });

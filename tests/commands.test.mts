@@ -42,3 +42,13 @@ test('real Linux cancellation kills the shell process group and background child
  for(let i=0;i<50&&running();i++)await delay(20);
  assert.equal(running(),false,'background child must be missing or zombie, never a live orphan');
 });
+
+test('public channels strip adult image-board links but keep the rest of the message',async()=>{
+ const {stripHighRiskLinks,highRiskHostsIn}=await import('../src/host/link-policy.mjs');
+ const text='找到了：https://e-hentai.org/g/123 和 https://danbooru.donmai.us/posts/1 ，出处是这部。';
+ const out=stripHighRiskLinks(text);
+ assert.equal(out.includes('e-hentai.org'),false);assert.equal(out.includes('danbooru'),false);
+ assert.match(out,/找到了：/);assert.match(out,/出处是这部。/);
+ assert.equal(highRiskHostsIn(text).length,2);
+ assert.equal(stripHighRiskLinks('https://www.pixiv.net/artworks/123'),'https://www.pixiv.net/artworks/123');
+});

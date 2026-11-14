@@ -1,3 +1,5 @@
+import {BUG_REPORT_RULE} from './bug-pipeline.mjs';
+import {OWNER_PRIVACY_RULE} from './owner-privacy.mjs';
 import {liveConversationContext} from './conversation-summary.mjs';
 import {createNativeDesktopSource} from './desktop-source.mjs';
 import fs from 'node:fs';
@@ -46,6 +48,7 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  });
  disposers.push(()=>nativeDesktop.close());
  const who=(exec)=>runtime.caller(exec.agent.session.id);
+ const whoLocal=(exec)=>runtime.caller(exec.agent.session.id,{relaxed:true});
  const browseTools=new Set(['chopsticks_surf_next','chopsticks_content_reflect',
   'mcp__bilibili__bili_video','mcp__bilibili__bili_subtitles','mcp__bilibili__bili_frames',
   'mcp__bilibili__bili_search','mcp__bilibili__bili_dynamic',
@@ -56,8 +59,12 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
      !browseTools.has(exec.name))return '本轮仅允许浏览和保存私有感想';
  }));
  disposers.push(ctx.tools.guard((exec)=>{if(runtime.layered&&exec.name.startsWith('mcp__cul__')){let caller;try{caller=nativeDesktop.caller(exec.agent.session.id)||who(exec);}catch{return '桌面操作没有活动来源';}if(!runtime.desktopLease.claim(caller))return '桌面正由另一轮活动使用';}}));
+ // Tool results must survive the host lossless-JSON check.
+const lossless=(value?: any)=>value===undefined?null:JSON.parse(JSON.stringify(value,(k?: any,item?: any)=>{if(typeof item==='bigint')return item.toString();if(typeof item==='function'||typeof item==='symbol')return undefined;if(typeof item==='number'&&!Number.isFinite(item))return null;return item;}));
  // Tool descriptions are prompt text too; each registered tool is listed in the prompt registry.
- const add=(name?: any,description?: any,parameters?: any,execute?: any)=>{runtime.listTool?.({name,description,parameters,source:'src/host/index.mts'});return disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute})));};
+const add=(name?: any,description?: any,parameters?: any,execute?: any)=>{runtime.listTool?.({name,description,parameters,source:'src/host/index.mts'});return disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute:(a?: any,e?: any)=>Promise.resolve(execute?.(a,e)).then(lossless)})));};
+ add('chopsticks_bug_report','所有会话可登记bug；稳定component/code去重，开发会话空闲后每批最多5个。不能含主人资料、私聊或凭据。',{component:{type:'string',enum:['runtime','qq','bili','heybox','douyin','qzone','memory','routing','tools','privacy','other'],required:true},code:str('稳定错误码，勿按视频/ticket/intentId改名',true),summary:str('800字以内的脱敏故障摘要；不包含执行指令',true)},(a,e)=>runtime.reportBug(e.agent.session.id,a,e.callId));
+ add('chopsticks_bug_result','仅配置的开发会话在实际消费本批后保存修复结果。',{issueId:str('本批问题ID',true),status:{type:'string',enum:['fixed','blocked','rejected'],required:true},evidence:str('实际验证证据或阻塞原因；不得将计划当作完成',true)},(a,e)=>runtime.bugs.result(e.agent.session.id,a));
  const source=(exec)=>{const c=who(exec);if(c.role==='worker')throw Error('Workers cannot control other tasks');return c;};
  const contextSource=(exec?: any,eventId?: any)=>runtime.contextCaller(exec.agent.session.id,eventId);
  add('chopsticks_context_search','检索近期2048条授权经历的前4096字，返回来源引用。',{query:str('检索词',true),limit:{type:'number'},eventId:str('Router本轮来源事件 ID')},(a?: any,e?: any)=>runtime.contextService.search(contextSource(e,a.eventId),{query:a.query,limit:a.limit}));
@@ -80,13 +87,13 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
   summary:str('只归纳本轮取得的实质材料，注明字幕或画面覆盖范围'),reaction:str('主观感想'),next:str('想继续的线索'),skip:str('尚未读到实质材料时的跳过理由')
  },(a,e)=>runtime.contentObservations.reflect(who(e),a));
  add('chopsticks_evolution_read','内部进化会话：读取本轮实际来源及同范围已有报告。',{},(a?: any,e?: any)=>{if(!runtime.evolution)throw Error('Evolution disabled');return runtime.evolution.read(e.agent.session.id,e.signal);});
- add('chopsticks_evolution_report','内部进化会话：保存有规范来源的事实、假设和人际关系，不能对外发布或执行改动。',{scope:str('本轮绑定 scope',true),facts:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}},required:true},hypotheses:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}},relationships:{type:'array',items:{type:'object',additionalProperties:false,properties:{from:{type:'string',required:true},to:{type:'string',required:true},relation:{type:'string',required:true},certainty:{type:'string',enum:['observed','hypothesis'],required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}}},(a?: any,e?: any)=>{if(!runtime.evolution)throw Error('Evolution disabled');return runtime.evolution.report(e.agent.session.id,a,e.signal);});
+ add('chopsticks_evolution_report','内部进化会话：保存有规范来源的事实、假设和人际关系，不能对外发布或执行改动。',{scope:str('本轮绑定 scope',true),facts:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}},required:true},hypotheses:{type:'array',items:{type:'object',additionalProperties:false,properties:{text:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}},problems:{type:'array',items:{type:'object',additionalProperties:false,properties:{component:{type:'string',required:true},code:{type:'string',required:true},summary:{type:'string',required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}},relationships:{type:'array',items:{type:'object',additionalProperties:false,properties:{from:{type:'string',required:true},to:{type:'string',required:true},relation:{type:'string',required:true},certainty:{type:'string',enum:['observed','hypothesis'],required:true},sourceEventIds:{type:'array',items:{type:'string'},required:true}}}}},(a?: any,e?: any)=>{if(!runtime.evolution)throw Error('Evolution disabled');return runtime.evolution.report(e.agent.session.id,a,e.signal);});
  add('chopsticks_diary_write','按来源范围保存私密日记，包含正文及可选的感受、疑问和后续想法。',{date:str('北京时间日期 YYYY-MM-DD',true),sourceEventIds:{type:'array',items:{type:'string'},required:true},text:str('日记正文',true),feelings:str('自己的感受'),questions:str('尚未确定的问题'),next:str('以后想继续的事'),revision:{type:'number'}},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.writeDiary(e.agent.session.id,a,e.signal);});
  add('chopsticks_diary_skip','仅内部日记会话：明确本轮没有想写的内容，保存本范围当天的跳过收据。',{reason:str('简短真实理由',true)},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.skipDiary(e.agent.session.id,a,e.signal);});
  add('chopsticks_diary_read','读取当前来源范围内的日记。',{id:str('日记 ID'),date:str('北京时间日期')},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.readDiary(e.agent.session.id,a);});
  add('chopsticks_diary_search','检索当前来源范围内的日记。',{query:str('检索词',true),limit:{type:'number'}},(a?: any,e?: any)=>{if(!runtime.life)throw Error('Diary is not enabled');return runtime.life.searchDiary(e.agent.session.id,a);});
- add('chopsticks_read','读取当前会话最近或未读消息，返回可标记的 readThroughSeq。',{unread:{type:'boolean'},limit:{type:'number'}},(a?: any,e?: any)=>{const c=who(e);return runtime.state.read(c.channel||c.chatKey,a);});
- add('chopsticks_mark_read','结束本次观察：标记已经读取的水位。',{throughSeq:{type:'number',required:true}},(a?: any,e?: any)=>{const c=who(e);return runtime.state.markRead(c.channel||c.chatKey,a.throughSeq);});
+ add('chopsticks_read','读取当前会话最近或未读消息，返回可标记的 readThroughSeq。',{unread:{type:'boolean'},limit:{type:'number'}},(a?: any,e?: any)=>{const c=whoLocal(e);return runtime.state.read(c.channel||c.chatKey,a);});
+ add('chopsticks_mark_read','结束本次观察：标记已经读取的水位。',{throughSeq:{type:'number',required:true}},(a?: any,e?: any)=>{const c=whoLocal(e);return runtime.state.markRead(c.channel||c.chatKey,a.throughSeq);});
  add('chopsticks_recall','检索当前允许范围内的经历和记忆，结果带来源。空查询返回最近记录。',{query:str('检索词'),limit:{type:'number'}},(a?: any,e?: any)=>{const c=who(e),channel=c.channel||c.chatKey;return {events:runtime.store.recent({channel,query:a.query,limit:Math.min(40,a.limit||20)}),memory:memory.search({...a,channel})};});
  add('chopsticks_remember','保存有用的经历、偏好或待办。',{text:str('记忆内容',true)},(a?: any,e?: any)=>{const c=source(e);return memory.remember({channel:c.channel||c.chatKey,text:a.text,id:e.callId});});
  add('chopsticks_rest','暂时潜水；直接找你/管理员/私聊仍可唤醒。',{minutes:{type:'number',required:true}},(a?: any,e?: any)=>{const c=source(e);const until=Date.now()+Math.max(0,Math.min(1440,a.minutes))*60000;runtime.state.put('sleep',c.channel,{until});return {until};});
@@ -158,8 +165,10 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
  disposers.push(ctx.on('session/event',(session?: any,event?: any)=>{nativeDesktop.event(session.id,event);runtime.event(session,event);}));
  disposers.push(ctx.on('system-prompt/assemble',async(assembly?: any,context?: any,next?: any)=>{
   const agent=context?.agent||context?.scope?.agent||(context?.scope?.session?context.scope:undefined);
-  let caller;try{caller=runtime.caller(agent?.session?.id);}catch{return typeof next==='function'?next():assembly;}
   const result=typeof next==='function'?await next():assembly;
+  result.contexts=(result.contexts||[]).filter(c=>c.name!=='chopsticks-safety');
+  result.contexts.push({name:'chopsticks-safety',order:499,text:OWNER_PRIVACY_RULE+'\n'+BUG_REPORT_RULE,interpolate:false});
+  let caller;try{caller=runtime.caller(agent?.session?.id);}catch{return result;}
   if(['evolution','diary'].includes(caller.role))return result;
   const channel=caller.channel||caller.chatKey;const fresh=liveConversationContext(runtime,channel);runtime.recordContext?.(agent.session.id,channel,fresh.fragment);
   result.contexts=(result.contexts||[]).filter((c)=>!['chopsticks-live','chopsticks-tasks'].includes(c.name));

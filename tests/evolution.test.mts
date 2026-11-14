@@ -14,6 +14,26 @@ const saveAll=async (f?: any) =>{await f.sessions.start();await flush();for(cons
 const consume=(f?: any,call?: any)=>f.sessions.event(call.sessionId,{type:'user/message',data:{source:{rpcId:call.action.dispatchId}}});
 const report=(call?: any,id?: any)=>({scope:call.event.meta.scope,facts:[{text:'聊了茶',sourceEventIds:[id]}],hypotheses:[{text:'可能喜欢茶，待确认',sourceEventIds:[id]}],relationships:[]});
 
+test('watchdog automatically reports operation failures and reflection accepts only sourced bug findings',async t=>{
+ const f=fixture(t),bugs=[];f.opts['onBug']=(source,input)=>{bugs.push({source,input});return {persisted:true};};
+ await f.evo.close();const evo=module.createEvolution(f.opts);t.after(()=>evo.close());
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'CONTROL_NOT_UNIQUE',at:1000001}]};
+ add(f,'source','g:1');await f.sessions.start();await evo.start();await flush();
+ assert.equal(bugs.length,1);assert.equal(bugs[0].input.code,'CONTROL_NOT_UNIQUE');
+ const c=f.calls.find(x=>x.event.channel==='evolution:reflection');consume(f,c);
+ const input={...report(c,'source'),problems:[{component:'privacy',code:'owner_disclosure',summary:'owner disclosure risk',sourceEventIds:['source']}]};
+ assert.throws(()=>evo.report(c.sessionId,{...input,problems:[{...input.problems[0],sourceEventIds:['forged']}]}));
+ evo.report(c.sessionId,input);assert.equal(bugs.length,2);assert.equal(bugs[1].source.kind,'reflection');
+});
+test('watchdog only submits fresh health observations once and reporting overload does not stop evolution',async t=>{
+ const f=fixture(t),bugs=[];f.opts['onBug']=(source,input)=>{bugs.push(input);if(input.code==='capacity')throw Error('Bug queue capacity reached');};
+ await f.evo.close();const evo=module.createEvolution(f.opts);t.after(()=>evo.close());
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'old',at:999999}]};await evo.poll();assert.equal(bugs.length,0);
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'fresh',at:1000001}]};await evo.poll();await evo.poll();assert.equal(bugs.length,1);
+ f.health={issues:[{platform:'douyin',operation:'comment',state:'unknown',code:'capacity',at:1000002}]};await assert.doesNotReject(evo.poll());
+ assert.equal(f.state.get('health','bug-reporting').state,'error');assert.ok(f.state.get('evolution-cursor','watchdog'));
+});
+
 test('social review excludes content comments before inference and publishes a durable graph after saving',async (t?: any) =>{
  const f=fixture(t);add(f,'group','g:1');add(f,'comment','bili:public');add(f,'dm','bili:dm:42');add(f,'feed','qzone:friends');
  await f.sessions.start();await f.evo.start();await flush();
@@ -35,3 +55,44 @@ test('internal presets reject all external actor tools, shell and desktop',()=>{
 test('watchdog includes recorded operation failures without targets or authentication secrets',()=>{assert.ok(module);assert.deepEqual(module.evolutionSnapshot({issues:[{platform:'douyin',operation:'detail',state:'partial',code:'empty_detail',warningCount:1,accountId:'private',text:'body',cookie:'secret'}]}),{issues:[{platform:'douyin',operation:'detail',state:'partial',code:'empty_detail',warningCount:1}]});});
 
 test('reportless turn stays incomplete across restart and gets only one delayed same-source retry',async (t?: any) =>{const f=fixture(t);add(f,'real');await f.sessions.start();await f.evo.start();await flush();const c=f.calls.find((x)=>x.event.channel==='evolution:reflection');consume(f,c);f.sessions.event(c.sessionId,{type:'turn/end'});await f.evo.poll();assert.equal(f.state.get('evolution-cursor','reflection:private:qq')?.seq||0,0);assert.equal(f.state.get('evolution-turn',c.action.dispatchId).status,'incomplete');const count=f.state.list('platform-job').length;await f.evo.poll();assert.equal(f.state.list('platform-job').length,count);await f.evo.close();const restarted=module.createEvolution(f.opts);await restarted.start();assert.equal(f.state.list('platform-job').length,count);f.time=1060001;await restarted.poll();await flush();const next=f.calls.filter((x)=>x.event.channel==='evolution:reflection').at(-1);assert.notEqual(next.action.dispatchId,c.action.dispatchId);assert.deepEqual(next.event.meta.sourceEventIds,['real']);consume(f,next);f.sessions.event(next.sessionId,{type:'turn/end'});await restarted.poll();f.time=2000000;await restarted.poll();assert.equal(f.state.list('platform-job').filter((x)=>x.key==='evolution.reflection').length,2);assert.equal(f.state.get('evolution-turn',next.action.dispatchId).status,'attention_required');assert.equal(f.state.list('evolution-report').length,0);add(f,'new-real');await restarted.poll();await flush();assert.equal(f.state.list('platform-job').filter((x)=>x.key==='evolution.reflection').length,3);const fresh=f.calls.filter((x)=>x.event.channel==='evolution:reflection').at(-1);consume(f,fresh);restarted.report(fresh.sessionId,report(fresh,'new-real'));assert.equal(f.state.get('evolution-cursor','reflection:private:qq').seq,f.store.get('new-real').seq);assert.equal(f.state.list('evolution-report').length,1);await restarted.close();});
+
+test('relationship and problems rejections name the failing rule instead of one opaque message',async (t?: any) =>{
+ const f=fixture(t);add(f,'real','g:1');await f.sessions.start();await f.evo.start();await flush();
+ const reflection=f.calls.find((c)=>c.event.channel==='evolution:reflection');assert.ok(reflection);
+ const social=f.calls.find((c)=>c.event.channel==='evolution:social');assert.ok(social);
+ consume(f,reflection);consume(f,social);
+ const edge={from:'42',to:'fish',relation:'喝过茶',certainty:'observed',sourceEventIds:['real']};
+ assert.throws(()=>f.evo.report(reflection.sessionId,{...report(reflection,'real'),relationships:[edge]}),/only accepted in social turns; this turn is reflection/);
+ assert.throws(()=>f.evo.report(social.sessionId,{...report(social,'real'),relationships:[{...edge,certainty:'guess'}]}),/certainty must be observed or hypothesis/);
+ assert.throws(()=>f.evo.report(social.sessionId,{...report(social,'real'),relationships:[{...edge,to:'999'}]}),/from\/to must be "fish" or the actorId of a cited source event/);
+ const problem={component:'qq',code:'media_unreadable',summary:'media unreadable',sourceEventIds:['real']};
+ assert.throws(()=>f.evo.report(social.sessionId,{...report(social,'real'),problems:[problem]}),/only accepted in watchdog or reflection turns; this turn is social/);
+ assert.throws(()=>f.evo.report(reflection.sessionId,{...report(reflection,'real'),problems:Array.from({length:6},()=>problem)}),/at most 5 entries/);
+ assert.throws(()=>f.evo.report(reflection.sessionId,{...report(reflection,'real'),problems:[{...problem,component:'nope'}]}),/component must be one of/);
+});
+test('watchdog snapshot text keeps every recorded issue instead of being sliced mid-entry',async (t?: any) =>{
+ const f=fixture(t);const issues=Array.from({length:20},(_,i)=>({platform:'heybox',operation:'read'+String.fromCharCode(97+i),state:'error',code:'code'+String.fromCharCode(97+i),at:1000001+i}));
+ f.health={ready:true,qq:{state:'ready'},bili:{state:'ready'},issues};await f.sessions.start();await f.evo.start();await flush();
+ const call=f.calls.find((x)=>x.event.channel==='evolution:watchdog');assert.ok(call);
+ const sources=JSON.parse(call.event.text),snapshot=sources.find((s?: any)=>s.kind==='timer');assert.ok(snapshot);
+ const parsed=JSON.parse(snapshot.text);assert.equal(parsed.issues.length,20);assert.equal(Object.keys(parsed)[0],'issues');
+ assert.deepEqual(parsed.issues.map((x?: any)=>x.operation),issues.map((x)=>x.operation));
+});
+
+test('watchdog review interval is bounded and reports when a configured value was capped',async (t?: any) =>{
+ const f=fixture(t);const evo=module.createEvolution({...f.opts,config:{reviewIntervalMs:7200000}});t.after(()=>evo.close());
+ assert.equal(evo.status().reviewIntervalMs,3600000);assert.equal(evo.status().intervalCapped,true);
+ const normal=module.createEvolution({...f.opts,config:{reviewIntervalMs:60000}});t.after(()=>normal.close());
+ assert.equal(normal.status().reviewIntervalMs,60000);assert.equal(normal.status().intervalCapped,false);
+});
+
+test('health snapshot keeps QQ receive health instead of only a contradictory connected flag',()=>{
+ const snapshot=module.evolutionSnapshot({ready:true,qq:{connected:false,started:true,receiveHealthy:true,reconnecting:false,reconnectAttempts:2,lastPacketAt:123,selfId:'10001'}});
+ assert.equal(snapshot.qq.receiveHealthy,true);assert.equal(snapshot.qq.reconnecting,false);assert.equal(snapshot.qq.reconnectAttempts,2);
+ assert.doesNotMatch(JSON.stringify(snapshot),/10001/);
+});
+
+test('unresolved platform sends stay in the watchdog issue list',()=>{
+ const snap: any=module.evolutionSnapshot({ready:true,unresolved:[{id:'douyin:dm',code:'SUBMISSION_UNKNOWN'}]});
+ assert.equal(snap.issues.some((x?: any)=>x.platform==='douyin'&&x.operation==='dm'&&x.state==='unknown'&&x.code==='SUBMISSION_UNKNOWN'),true);
+});

@@ -41,7 +41,7 @@ test('proxy creates one child and closes it when closed',async()=>{
 test('abort stops the sole worker and does not recreate it before exit',async()=>{
  let starts=0,kills=0;const child: any=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.pid=123;child.stdin.resume();
  const p=helper.createUserPlatform({launch:{command:'fake',args:[],env:{}},spawnImpl:()=>{starts++;return child;},killImpl:()=>{kills++;setImmediate(()=>child.emit('exit',null,'SIGTERM'));}});
- const controller=new AbortController();const pending=p.read({action:'feed',signal:controller.signal});controller.abort();assert.ok((await pending).warnings.includes('TRANSPORT_ERROR'));assert.equal((await p.status()).state,'error');assert.equal(starts,1);assert.equal(kills,1);await p.close();
+ const controller=new AbortController();const pending=p.read({action:'feed',signal:controller.signal});controller.abort();assert.ok((await pending).warnings.includes('OWNER_UNAVAILABLE'));assert.equal((await p.status()).state,'error');assert.equal(starts,1);assert.equal(kills,1);await p.close();
 });
 
 test('factory delegates desktop-owned platform through one isolated proxy',async()=>{
@@ -195,7 +195,7 @@ test('browser transport uses the supplied X11 backend only in headed mode',async
  const {createBrowserTransport}=await import('../src/platforms/douyin/transport.mjs');
  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
  const page={isClosed:()=>false,setDefaultTimeout(){},goto:async()=>{},evaluate:async()=> '123456'};
- for(const [headless,args] of [[false,['--ozone-platform=x11']],[true,['--disable-gpu']]]){
+ for(const [headless,args] of [[false,['--ozone-platform=x11','--window-size=1600,1000','--start-maximized']],[true,['--disable-gpu']]]){
   const dir=await mkdtemp(join(tmpdir(),'backend-'));
   let options;
   const b=createBrowserTransport({stateDir:dir,config:{douyin:{chromePath:'fake',headless,browserBackend:'x11'}},chromium:{launchPersistentContext:async(_dir?: any,value?: any)=>{
@@ -208,3 +208,12 @@ test('browser transport uses the supplied X11 backend only in headed mode',async
   assert.deepEqual(options.args,args);
  }
 });
+
+test('a dead desktop worker is reported as owner unavailable rather than a transport fault',async()=>{
+ const {workerCode}=await import('../src/platforms/douyin/user-platform.mjs');
+ assert.equal(workerCode(Object.assign(Error('worker unavailable'),{})),'OWNER_UNAVAILABLE');
+ assert.equal(workerCode(Object.assign(Error('closed'),{})),'OWNER_UNAVAILABLE');
+ assert.equal(workerCode(Object.assign(Error('x'),{code:'DESKTOP_UNAVAILABLE'})),'DESKTOP_UNAVAILABLE');
+ assert.equal(workerCode(Error('page crashed')),'TRANSPORT_ERROR');
+});
+

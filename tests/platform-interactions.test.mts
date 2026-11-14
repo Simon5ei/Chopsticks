@@ -50,3 +50,10 @@ test('platform inbox and notifications baseline history then route new messages 
  const dm=events.find((e)=>e.channel==='douyin:dm:42');assert.equal(dm.meta.sourceTargetId,'42');assert.equal(dm.meta.platformContext.conversationId,'0:1:42:99');
  const notice=events.find((e)=>e.channel==='douyin:public');assert.equal(notice.meta.sourceTargetId,'123');assert.equal(notice.meta.parentId,'456');assert.equal(notice.meta.addressed,true);
 });
+
+test('inbox transport failures are stored as a distinguishable code',async (t?: any) =>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'inbox-code-')),store=createEventStore({stateDir:dir}),state=createHostState(store);
+ const owner=createLifeOwner({config:{stateDir:dir},state,store,authorize:()=>{},now:()=>2000,onEvent:(e)=>store.append(e),platforms:{douyin:{capabilities:{inbox:true},read:async()=>{throw Object.assign(new Error('request timed out'),{code:'ETIMEDOUT'});}}}});
+ t.after(async()=>{await owner.close();store.close();fs.rmSync(dir,{recursive:true,force:true});});await owner.pollInteractions();
+ assert.equal(state.get('health','life-inbox:douyin:inbox:all').code,'inbox_timeout');
+});

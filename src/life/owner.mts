@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import {observationMedia} from './observation-media.mjs';
+import {assertOwnerPrivacy} from '../host/owner-privacy.mjs';
+import {stripHighRiskLinks} from '../host/link-policy.mjs';
 import {publishInput} from './publish-input.mjs';
 import {operatorDmBinding} from './operator-dm.mjs';
 import {createLivePlatformTests} from './live-platforms.mjs';
@@ -34,14 +36,35 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
  function track<T>(fn: () => T | PromiseLike<T>): Promise<T>{if(closed)throw fail();const p=Promise.resolve().then(fn);pending.add(p);p.finally(()=>pending.delete(p)).catch(()=>{});return p;}
  function authorizedScope(binding?: any,platform?: any){if(!binding||binding.platform!==platform||typeof binding.channel!=='string')throw fail();const route=platformRoute(binding.channel);const expected=platform==='bilibili'?'bili':platform;if(route.platform!==expected||binding.scope!==route.scope)throw fail();return route.scope;}
  function allowed(item?: any,scope?: any,platform?: any){if(item.visibility==='public')return scope==='public';if(item.visibility==='friends')return platform==='qzone'&&scope==='qzone:friends';if(item.visibility==='private')return scope===`private:${platform==='bilibili'?'bili':platform}`;return false;}
- function operationHealth(platform?: any,action?: any,value?: any,error: boolean=false){const code=safeCode(value?.code);const receiptId=typeof value?.receiptId==='string'&&/^[A-Za-z0-9:_-]{1,128}$/.test(value.receiptId)?value.receiptId:undefined;state.put?.('health',`life-operation:${platform}:${action}`,{state:/verification_required/i.test(code||'')?'verification_required':/login_required/i.test(code||'')?'login_required':error||value?.confirmed===false?'unknown':'ready',at:now(),...code?{code}:{},...receiptId?{receiptId}:{}});return Object.assign(fail(),{...code?{code:code.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,80)}:{},...receiptId?{receiptId}:{}});}
+ function operationHealth(platform?: any,action?: any,value?: any,error: boolean=false){
+  const code=safeCode(value?.code)||(['verification_required','login_required'].includes(value?.state)?value.state:undefined);
+  const receiptId=typeof value?.receiptId==='string'&&/^[A-Za-z0-9:_-]{1,128}$/.test(value.receiptId)?value.receiptId:undefined;
+  state.put?.('health',`life-operation:${platform}:${action}`,{state:/verification_required/i.test(code||'')?'verification_required':/login_required/i.test(code||'')?'login_required':error||value?.confirmed===false?'unknown':'ready',at:now(),...code?{code}:{},...receiptId?{receiptId}:{}});
+  if(['comment','reply','publish','dm','like'].includes(action)&&/^(?:CONTROL_NOT_UNIQUE|CONTROL_NOT_FOUND|CONTROL_NOT_VISIBLE|CONTROL_AMBIGUOUS|(?:readback_)?verification_required|login_required)$/i.test(code||''))
+   state.put?.('operation-hold',`${platform}:${action}`,{code,at:now(),active:true,uncertain:!['refused','login_required','verification_required'].includes(value?.state)});
+  if(value?.state==='uncertain'||value?.deliveryState==='uncertain')state.put?.('life-unresolved',`${platform}:${action}`,{code:code||'UNCONFIRMED',at:now()});
+  return Object.assign(fail(),{...code?{code:code.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,80)}:{},...receiptId?{receiptId}:{}});
+ }
+ // A verification/login hold records why one attempt stopped, not a permanent
+ // ban. Once the platform itself reports ready again (fresh status read or a
+ // completed login), the resolved hold is retired so a new intent is not
+ // blocked forever. Ambiguous sends (uncertain) are never retired here.
+ function retireResolvedHolds(platform?: any,stateName?: any){
+  if(stateName!=='ready'||typeof state.list!=='function')return;
+  for(const hold of state.list('operation-hold')){
+   if(!hold?.active||hold.uncertain!==false)continue;
+   if(String(hold.id||'').split(':')[0]!==platform)continue;
+   if(!/^(?:readback_)?verification_required$|login_required$/i.test(String(hold.code||'')))continue;
+   const {id,...value}=hold;state.put?.('operation-hold',id,{...value,active:false,retiredAt:now()});
+  }
+ }
  async function handle({platform,operation,args={}}: { platform?: any; operation?: any; args?: Record<string, any>; [key: string]: any }, {operator=false,signal:requestSignal}: { operator?: boolean; signal?: any; [key: string]: any }={}){return track(async()=>{
   const signal=AbortSignal.any([controller.signal,...(requestSignal?[requestSignal]:[])]);const ensureActive=()=>{if(signal.aborted)throw fail();};ensureActive();
   const adapter=owners[platform];if(!names.includes(platform)||!adapter)throw fail();
   if(operation==='diagnostics'){if(!operator||platform!=='douyin'||!((args.action==='publish_controls'&&Object.keys(args).every((k)=>k==='action'))||validDmDiagnostic(args))||typeof adapter.diagnostics!=='function')throw fail();return sanitizePublisherDiagnostics(await adapter.diagnostics({...args.action==='dm_controls'?args:{},signal}));}
   if(operation==='live_test'){if(!operator||Object.keys(args).some((k)=>!['revision','mode'].includes(k)))throw fail();return liveTests.run({platform,...args},{operator:true,signal});}
-  if(operation==='status'){const s=await adapter.status({signal}),result=platformStatus({...s,capabilities:s?.capabilities||adapter.capabilities||{}});const {accountId,...health}=result;state.put?.('health',`life-platform:${platform}`,{...health,at:now()});return result;}
-  if(operation==='login'){if(!operator||!['start','poll'].includes(args.action))throw fail();if(args.action==='start'){const current=await adapter.status({signal});ensureActive();if(['verification_required','ready'].includes(current?.state))return {state:current.state};}return adapter.login({action:args.action,signal});}
+  if(operation==='status'){const s=await adapter.status({signal}),result=platformStatus({...s,capabilities:s?.capabilities||adapter.capabilities||{}});const {accountId,...health}=result;state.put?.('health',`life-platform:${platform}`,{...health,at:now()});retireResolvedHolds(platform,result.state);return result;}
+  if(operation==='login'){if(!operator||!['start','poll'].includes(args.action))throw fail();if(args.action==='start'){const current=await adapter.status({signal});ensureActive();if(['verification_required','ready'].includes(current?.state))return {state:current.state};}const loggedIn=await adapter.login({action:args.action,signal});if(loggedIn?.state==='success')retireResolvedHolds(platform,'ready');return loggedIn;}
   let binding;
   if(operation==='direct_message'){
    if(!operator)throw fail();binding=operatorDmBinding({platform,args,state,now});args={...args,action:'dm'};operation='write';
@@ -111,10 +134,14 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
    return output;
   }
   if(config.validation===true&&!validationWritePlatforms.has(platform))return {confirmed:false,state:'refused',code:'VALIDATION_WRITES_DISABLED'};
-  const {action,targetId,intentId,text,parentId}=args;if(!['like','comment','reply','publish','dm'].includes(action)||!adapter.capabilities?.[action])return {confirmed:false,state:'unsupported',code:'ACTION_UNSUPPORTED'};
+  const {action,targetId,intentId,parentId}=args;let text=args.text;if(!['like','comment','reply','publish','dm'].includes(action)||!adapter.capabilities?.[action])return {confirmed:false,state:'unsupported',code:'ACTION_UNSUPPORTED'};
   if(typeof targetId!=='string'||!targetId.trim()||targetId.length>512||typeof intentId!=='string'||!intentId.trim()||intentId.length>256||(action!=='like'&&(typeof text!=='string'||!text.trim()||text.length>4000)))throw fail();
   if(action==='publish'){const own=platform==='qzone'?'own-friends':'own-public', visibility=platform==='qzone'?'friends':'public';if(targetId!==own||binding.allowedOwnTarget!==own||scope!==(platform==='qzone'?'qzone:friends':'public')||(args.visibility!=null&&args.visibility!==visibility))throw fail();}
   if(action!=='publish'&&targetId!==String(binding.sourceTargetId||binding.targetId))throw fail();
+  const hold=state.get?.('operation-hold',`${platform}:${action}`);
+  if(hold?.active){if(hold.uncertain)throw fail();return {confirmed:false,state:'refused',code:'OPERATION_HELD'};}
+  if(text)assertOwnerPrivacy(text,{config,channel:binding.channel});
+  if(text&&['public','qzone:friends'].includes(scope))text=stripHighRiskLinks(text);
   const date=dateParts(now()),day=`${date.year}-${date.month}-${date.day}`,category=action==='like'?'likes':action==='publish'?'posts':'comments',maximum={likes:12,posts:2,comments:8}[category];
   const publish=action==='publish'?publishInput(args,config):{};const writeContext=Object.keys(publish).length?{...binding,...publish}:binding;
   const input={...publish,platform,source:binding.requestId||binding.eventId,action,targetId,parentId:parentId||'',text:text||''},sendId=`life:${digest(input)}`;
@@ -123,7 +150,7 @@ export function createLifeOwner({config,state,store,socialPolicy,authorize,onEve
   return receipt;
  }).catch(()=>{throw fail();});}
  async function poll(){if(polling)return polling;polling=track(async()=>{const p=dateParts(now()),day=`${p.year}-${p.month}-${p.day}`,hour=Number(p.hour);if(![9,13,20,21,22].includes(hour))return;for(const name of ['qzone','heybox','douyin']){const adapter=owners[name];if(!adapter?.capabilities?.feed)continue;const key=`${name}:${day}`,schedule=state.get('life-schedule',key)||{count:0,last:0};if(schedule.count>=4||(schedule.last&&now()-schedule.last<1200000))continue;const attemptedAt=now();state.put('life-schedule',key,{count:schedule.count,last:attemptedAt});let consumed=false;try{const cursor=state.get('life-cursor',name)?.cursor;const feed=await adapter.read({action:'feed',limit:3,...cursor?{cursor}:{},signal:controller.signal});if(typeof feed.cursor==='string'&&feed.cursor.length<=1000)state.put('life-cursor',name,{cursor:feed.cursor});for(const item of (feed.items||[]).slice(0,3)){const scope=name==='qzone'?'qzone:friends':`${name}:public`;if(!item?.id||!allowed(item,name==='qzone'?'qzone:friends':'public',name))continue;const id=`life:proposal:${digest([name,item.id])}`;if(state.get('life-proposal',id))continue;if(!consumed){state.put('life-schedule',key,{count:schedule.count+1,last:attemptedAt});consumed=true;}state.put('life-proposal',id,{at:now()});await emit({id,kind:'timer',channel:scope,actorId:'fish',text:`Platform item available: ${bounded(item.id,512)}`,meta:{platform:name,itemId:bounded(item.id,512),sourceTargetId:bounded(item.id,512)}});}}catch{if(controller.signal.aborted)break;}}});try{return await polling;}finally{polling=null;}}
- async function status(){return Object.fromEntries(await Promise.all(names.map(async (name?: any) =>{if(!owners[name])return [name,{state:'unsupported',capabilities:{}}];try{return [name,await handle({platform:name,operation:'status',args:{}})];}catch{return [name,{state:'error',capabilities:{}}];}})));}
+ async function status(){return Object.fromEntries(await Promise.all(names.map(async (name?: any) =>{if(!owners[name])return [name,{state:'unsupported',capabilities:{}}];try{const view: any=await handle({platform:name,operation:'status',args:{}}),unresolved=(state.list?.('life-unresolved')||[]).filter((r)=>String(r.id).startsWith(name+':'));return [name,unresolved.length?{...view,unresolved}:view];}catch{return [name,{state:'error',capabilities:{}}];}})));}
  async function start(){if(closed||bridge)throw fail();const socketPath=config.life?.socketPath||path.join(root,'platform.sock');bridge=createPlatformBridge({socketPath,handle});await bridge.start();timer=setInterval(()=>poll().catch(()=>{}),60000);timer.unref?.();inboxTimer=setInterval(()=>pollInteractions().catch(()=>{}),20000);inboxTimer.unref?.();}
  async function close(){if(closed)return;closed=true;clearInterval(timer);clearInterval(inboxTimer);controller.abort();await bridge?.close();await Promise.allSettled([...pending]);await Promise.allSettled(Object.values(owners).map((x)=>x.close?.()));}
  return {start,close,poll,pollInteractions,handle,status};
