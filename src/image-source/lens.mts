@@ -108,10 +108,35 @@ export function lensFailureCode(error?: any) {
   return 'REQUEST_FAILED';
 }
 
+// Google's own sites and the hosts that only serve its scripts, thumbnails and
+// telemetry. Neither is ever the page an image came from.
+const GOOGLE_HOST_RE = /(?:^|\.)google\.(?:com|[a-z]{2,3}|com?\.[a-z]{2})$/i;
+const GOOGLE_ASSET_HOST_RE = /(?:^|\.)(?:gstatic\.com|googleusercontent\.com|googleapis\.com|ggpht\.com|google-analytics\.com|googletagmanager\.com|googlesyndication\.com|googleadservices\.com|doubleclick\.net)$/i;
+
+/**
+ * Decide what a request paused while resolving a Lens /goto card means.
+ * `continue`: Google's own navigation, let it proceed. `target`: the top-level
+ * navigation to the result site (never loaded, only its URL is kept). `miss`:
+ * anything else — a /goto page that renders Google UI requests gstatic scripts
+ * first, and those used to be reported as the image source.
+ */
+export function gotoRequestAction({url, resourceType}: { url?: any; resourceType?: any; [key: string]: any } = {}) {
+  let host;
+  try {
+    const parsed = new URL(String(url ?? ''));
+    if (!/^https?:$/.test(parsed.protocol)) return 'continue';
+    host = parsed.hostname;
+  } catch { return 'continue'; }
+  if (GOOGLE_HOST_RE.test(host)) return 'continue';
+  if (GOOGLE_ASSET_HOST_RE.test(host)) return 'miss';
+  return resourceType == null || resourceType === 'Document' ? 'target' : 'miss';
+}
+
 function safeCandidateUrl(raw?: any) {
   try {
     const url = new URL(String(raw ?? ''));
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    if (GOOGLE_HOST_RE.test(url.hostname) || GOOGLE_ASSET_HOST_RE.test(url.hostname)) return null;
     return url.href;
   } catch { return null; }
 }
@@ -441,8 +466,7 @@ async function uploadImage(state: any, file: any, {hl, timeoutMs, signal}: { hl?
 }
 
 async function resolveGoto(state: any, wrapperUrl: any, {timeoutMs, signal}: { timeoutMs?: any; signal?: any; [key: string]: any }) {
-  const isGoogle = (url) => { try { return /(^|\.)google\.[a-z.]+$/i.test(new URL(url).hostname); } catch { return true; } };
-  const send = (method?: any, params?: any) => state.send(method, params).catch(() => {});
+  const send =(method?: any, params?: any) => state.send(method, params).catch(() => {});
   try { await raced(state.send('Fetch.enable', {patterns: [{urlPattern: '*', requestStage: 'Request'}]}), signal); trace('goto:enabled'); }
   catch (error) { trace('goto:enable failed', error?.code); if (signal.aborted) throw error; return ''; }
   let target = '';
@@ -455,11 +479,12 @@ async function resolveGoto(state: any, wrapperUrl: any, {timeoutMs, signal}: { t
       const requestId = message.params?.requestId;
       const url = String(message.params?.request?.url ?? '');
       if (!requestId) return;
-      trace('goto:paused', isGoogle(url) ? 'google' : 'target', url.slice(0, 140));
-      if (isGoogle(url)) { send('Fetch.continueRequest', {requestId}); return; }
+      const action = gotoRequestAction({url, resourceType: message.params?.resourceType});
+      trace('goto:paused', action, url.slice(0, 140));
+      if (action === 'continue') { send('Fetch.continueRequest', {requestId}); return; }
       clearTimeout(timer);
       send('Fetch.failRequest', {requestId, errorReason: 'Aborted'});
-      resolve(url);
+      resolve(action === 'target' ? url : '');
     };
     state.ws.addEventListener('message', handler);
   });

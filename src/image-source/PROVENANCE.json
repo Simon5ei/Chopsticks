@@ -27,6 +27,7 @@
         "Accept only the fixed Google start/upload pages; no caller-supplied URL, proxy or executable reaches the upload flow.",
         "Return bounded HTTPS Lens candidates; account extraction and reply formatting are delegated to the unchanged upstream functions in accounts.mjs.",
         "Map captcha, unreachable Google, missing browser and deadline failures to stable codes without echoing upstream text.",
+        "Resolve a /goto card only from a top-level navigation to a non-Google site; Google and its asset hosts (gstatic, googleusercontent, ...) are never returned as a candidate.",
         "Bound the whole search, each CDP call and the number of resolved result cards."
       ]
     },
@@ -35,8 +36,9 @@
       "functions": ["extractAccounts", "dominantPersonName", "dropWeakArtwork", "formatReply", "accountNameOf", "socialNameFromTitle", "profileTitleName", "authorNameFromTitle", "nameFromTitleMention", "looksLikePersonName", "normalizePersonName", "engineLabels"],
       "helpers": ["PLATFORM_RULES", "PATH_DENY", "PLATFORM_WEIGHT", "ARTWORK_PLATFORMS"],
       "modifications": [
-        "Ported verbatim from the upstream file; only module imports and exports were adapted.",
-        "No new platforms, name rules or reply layout were added: Twitter/Weibo/Bilibili/Instagram/Pixiv URL rules, reserved-path filtering, strict dominant-name consensus and the original reply text are unchanged.",
+        "Ported from the upstream file; module imports and exports were adapted.",
+        "No new platforms or name rules were added: Twitter/Weibo/Bilibili/Instagram/Pixiv URL rules, reserved-path filtering, strict dominant-name consensus and the account reply text are unchanged.",
+        "A no-account reply lists every similar result as a numbered engine/title line plus its full link (bounded, never cut mid-URL) instead of the upstream single truncated closest-source line.",
         "No face recognition and no handle guessing; accounts exist only when a result URL backs them."
       ]
     }

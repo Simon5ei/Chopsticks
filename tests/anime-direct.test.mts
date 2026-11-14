@@ -49,6 +49,19 @@ test('source account reply layout is used for a twitter candidate',async()=>{
  const text=sent[0].text;
  assert.match(text,/🎯 \*\*鱼鱼找鸡结果\*\*/);assert.match(text,/🌐 平台：Twitter/);assert.match(text,/👤 名字：SuSu/);assert.match(text,/🆔 账号：@susu · https:\/\/x\.com\/susu/);
 });
+test('a no-account command reply carries every similar-image link from the search',async()=>{
+ const matches=[
+  {engine:'saucenao',title:'Pixiv work',sourceUrl:'https://pixiv.net/artworks/1',links:['https://pixiv.net/artworks/1'],similarity:.91},
+  {engine:'lens',title:'Blog post',sourceUrl:'https://example.org/post/2',links:['https://example.org/post/2'],similarity:null},
+  {engine:'lens',title:'Board',sourceUrl:'https://danbooru.donmai.us/posts/9',links:['https://danbooru.donmai.us/posts/9'],similarity:null},
+ ];
+ const {cmds,sent}=fixture({search:async()=>({matches,engines:[{engine:'saucenao',status:'ok',count:1},{engine:'lens',status:'ok',count:2},{engine:'iqdb',status:'failed',count:0,error:'UPSTREAM_BUSY'}]})});
+ assert.equal(cmds.accept(event),true);await cmds.drain();
+ assert.equal(sent.length,1);
+ const lines=sent[0].text.split('\n');
+ assert.match(sent[0].text,/翻到 3 条相似图/);
+ for(const match of matches)assert.ok(lines.includes(match.sourceUrl));
+});
 test('the bare command searches the default engines without IQDB, which stays selectable by name',async()=>{
  const bare={...event,meta:{messageId:'12',segments:[{type:'reply',data:{id:'9'}},{type:'text',data:{text:'/鱼鱼找鸡'}}]}};
  const first=fixture();assert.equal(first.cmds.accept(bare),true);await first.cmds.drain();

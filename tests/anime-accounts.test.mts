@@ -79,6 +79,52 @@ test('formatReply distinguishes no engines, similar images and empty results', (
   assert.match(formatReply({ accounts: [], candidates: [], enginesUsed: ['lens'], failures: [] }), /都空/);
 });
 
+// Regression (2026-11-13): a no-account reply showed one "最接近的图源" cut to
+// 120 characters and dropped every other similar result.
+test('a no-account reply lists every similar-image link in full', () => {
+  const long = `https://example.org/gallery/${'a'.repeat(160)}`;
+  const candidates = [
+    { engine: 'saucenao', title: 'Pixiv work', sourceUrl: 'https://pixiv.net/artworks/1', similarity: 0.91 },
+    { engine: 'lens', title: 'Some blog post', sourceUrl: long, similarity: null },
+    { engine: 'lens', title: '', sourceUrl: 'https://danbooru.donmai.us/posts/9', similarity: null },
+  ];
+  const text = formatReply({ accounts: [], candidates, enginesUsed: ['saucenao', 'lens'], failures: [{ engine: 'iqdb', reason: '上游繁忙' }] });
+  assert.match(text, /翻到 3 条相似图/);
+  assert.doesNotMatch(text, /最接近的图源/);
+  const lines = text.split('\n');
+  for (const candidate of candidates) assert.ok(lines.includes(candidate.sourceUrl), `missing full link ${candidate.sourceUrl.slice(0, 40)}`);
+  assert.match(text, /1\. \[SauceNAO 91%\] Pixiv work/);
+  assert.match(text, /2\. \[谷歌 Lens\] Some blog post/);
+  assert.match(text, /3\. \[谷歌 Lens\]\n/);
+  assert.doesNotMatch(text, /NaN|null|undefined/);
+});
+
+test('similar-image links stay bounded and are never cut mid-URL', () => {
+  const huge = `https://example.org/${'b'.repeat(5000)}`;
+  const candidates = [
+    { engine: 'lens', title: 'first', sourceUrl: 'https://example.org/first' },
+    { engine: 'lens', title: 'huge', sourceUrl: huge },
+    { engine: 'lens', title: 'last', sourceUrl: 'https://example.org/last' },
+  ];
+  const text = formatReply({ accounts: [], candidates, enginesUsed: ['lens'], failures: [] });
+  assert.ok(text.length <= 3500, `reply too long: ${text.length}`);
+  const lines = text.split('\n');
+  assert.ok(lines.includes('https://example.org/first'));
+  assert.ok(lines.includes('https://example.org/last'));
+  assert.doesNotMatch(text, /bbbbbbbb/);
+  assert.match(text, /另有 1 条链接过长没列出/);
+});
+
+test('a reply with accounts keeps the source layout and does not append the similar-image list', () => {
+  const candidates = [
+    { engine: 'lens', sourceUrl: 'https://x.com/susu/status/1', title: 'XSuSu on X: "hi"' },
+    { engine: 'lens', sourceUrl: 'https://example.org/other', title: 'other' },
+  ];
+  const accounts = [{ platform: 'twitter', handle: '@susu', url: 'https://x.com/susu', authorName: 'SuSu', confidence: 'direct', evidence: { sourceUrl: 'https://x.com/susu/status/1' } }];
+  const text = formatReply({ accounts, candidates, enginesUsed: ['lens'], failures: [] });
+  assert.doesNotMatch(text, /相似图：|example\.org/);
+});
+
 test('Pixiv-only accounts carry the artwork-platform caveat, and weak artwork can be dropped', () => {
   const accounts = [{ platform: 'pixiv', handle: '123', url: 'https://www.pixiv.net/users/123', authorName: '', confidence: 'weak', evidence: { similarity: 0.4 } }];
   const text = formatReply({ accounts, candidates: [], enginesUsed: ['lens'], failures: [] });

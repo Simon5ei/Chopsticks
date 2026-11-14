@@ -3,7 +3,9 @@
 // Source SHA-256: 440a4ecc12e0bd251f63994a038ec36af3d51cd6b40904adaa644bea1501c3a6
 // The rules, strict-consensus filtering and reply layout below are the
 // upstream implementation; only imports and the bounding of exported helpers
-// were adapted for this runtime.
+// were adapted for this runtime. One deliberate difference: a no-account reply
+// lists every similar result link (similarLinks) instead of upstream's single
+// "最接近的图源" line.
 
 const PLATFORM_RULES = [
   {
@@ -377,10 +379,45 @@ export function formatReply({ accounts = [], candidates = [], enginesUsed = [], 
     const shown = handles.length ? `（${handles.join('、')}）` : '';
     lines.push(`翻到 ${Number(nameDropped)} 个别人的号${shown}，名字对不上${consensusName ? `「${trimText(consensusName, 24)}」` : '主轴'}，没当成这个人报`);
   }
-  if (top) lines.push(`最接近的图源：${trimText(top.sourceUrl, 120)}`);
   let text = lines.join('\n');
   if (text.length > 900) text = text.slice(0, 897) + '…';
-  return text;
+  // Chopsticks change (not upstream): list every similar result instead of one
+  // truncated "最接近的图源". The consensus pick, when there is one, stays first.
+  const ordered = top ? [top, ...pool.filter((candidate?: any) => candidate !== top)] : pool;
+  return text + similarLinks(ordered, REPLY_LIMIT - text.length);
+}
+
+const REPLY_LIMIT = 3000;
+const LINK_LIMIT = 600;
+
+/**
+ * Numbered "engine + title / full URL" entries for a no-account reply. A link
+ * is listed whole or not at all: a cut URL cannot be opened, so entries that do
+ * not fit the remaining budget are counted instead of truncated.
+ */
+function similarLinks(pool?: any, budget: number = REPLY_LIMIT) {
+  const heading = '\n相似图：';
+  const skippedNote = (count: number) => `\n另有 ${count} 条链接过长没列出`;
+  const reserve = skippedNote(99).length;
+  const seen = new Set<any>();
+  const entries = [];
+  let used = heading.length;
+  let skipped = 0;
+  for (const candidate of Array.isArray(pool) ? pool : []) {
+    const url = String(candidate?.sourceUrl ?? '').trim();
+    if (!url || /\s/.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const similarity = Number(candidate?.similarity);
+    const percent = candidate?.similarity != null && Number.isFinite(similarity) && similarity > 0 && similarity <= 1
+      ? `${Math.round(similarity * 100)}%` : '';
+    const tag = [ENGINE_LABELS[candidate?.engine] ?? '', percent].filter(Boolean).join(' ');
+    const described = [tag ? `[${tag}]` : '', trimText(stripTags(candidate?.title), 60)].filter(Boolean).join(' ');
+    const entry = `\n${entries.length + 1}.${described ? ' ' + described : ''}\n${url}`;
+    if (url.length > LINK_LIMIT || used + entry.length + reserve > budget) { skipped += 1; continue; }
+    entries.push(entry);
+    used += entry.length;
+  }
+  return (entries.length ? heading + entries.join('') : '') + (skipped ? skippedNote(skipped) : '');
 }
 
 const ENGINE_LABELS = {

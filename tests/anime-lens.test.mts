@@ -1,8 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-let mapLensRows, lensFailureCode, raced;
-try { ({ mapLensRows, lensFailureCode, raced } = await import('../src/image-source/lens.mjs') as any); } catch {}
+let mapLensRows, lensFailureCode, raced, gotoRequestAction;
+try { ({ mapLensRows, lensFailureCode, raced, gotoRequestAction } = await import('../src/image-source/lens.mjs') as any); } catch {}
+
+// Regression (2026-11-13): a /goto card that rendered a Google page instead of
+// redirecting had its first gstatic script request reported as the image source
+// ("最接近的图源：https://www.gstatic.com/_/mss/search-next/_/js/…").
+test('resolving a Lens card accepts only a top-level navigation to a non-Google site', () => {
+  assert.equal(typeof gotoRequestAction, 'function', 'lens must expose its /goto request classifier');
+  assert.equal(gotoRequestAction({ url: 'https://www.google.com/goto?url=abc', resourceType: 'Document' }), 'continue');
+  assert.equal(gotoRequestAction({ url: 'https://www.google.com.hk/search?q=1', resourceType: 'Document' }), 'continue');
+  assert.equal(gotoRequestAction({ url: 'https://x.com/someone/status/1', resourceType: 'Document' }), 'target');
+  assert.equal(gotoRequestAction({ url: 'https://x.com/someone/status/1' }), 'target');
+  assert.equal(gotoRequestAction({ url: 'https://www.gstatic.com/_/mss/search-next/_/js/k=search-next.aim.zh_CN.x/ck=y', resourceType: 'Script' }), 'miss');
+  assert.equal(gotoRequestAction({ url: 'https://www.gstatic.com/some/page', resourceType: 'Document' }), 'miss');
+  assert.equal(gotoRequestAction({ url: 'https://lh3.googleusercontent.com/abc', resourceType: 'Image' }), 'miss');
+  assert.equal(gotoRequestAction({ url: 'https://cdn.example.com/app.js', resourceType: 'Script' }), 'miss');
+  // A look-alike host is a foreign site: its navigation is stopped, never loaded.
+  assert.equal(gotoRequestAction({ url: 'https://google.evil.example/x', resourceType: 'Document' }), 'target');
+  assert.equal(gotoRequestAction({ url: 'not a url', resourceType: 'Document' }), 'continue');
+});
+
+test('lens never reports Google or its asset hosts as an image source', () => {
+  const mapped = mapLensRows([
+    { url: 'https://www.gstatic.com/_/mss/search-next/_/js/k=search-next.aim.zh_CN.x/ck=y', title: 'card' },
+    { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:abc', title: 'thumbnail' },
+    { url: 'https://lh3.googleusercontent.com/abc', title: 'asset' },
+    { url: 'https://www.google.com/search?q=1', title: 'google' },
+    { url: 'https://notgstatic.com/post/1', title: 'look-alike is a normal site' },
+    { url: 'https://x.com/foo/status/1', title: 'XFoo on X: "hi"' },
+  ]);
+  assert.deepEqual(mapped.map((m?: any) => m.sourceUrl), ['https://notgstatic.com/post/1', 'https://x.com/foo/status/1']);
+});
 
 // Regression (2026-11-13): after a Lens deadline or cancellation the next CDP
 // call was still dispatched, its promise was dropped, and its later rejection
