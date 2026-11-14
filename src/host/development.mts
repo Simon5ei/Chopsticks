@@ -1,5 +1,6 @@
+import {createHostPrompts} from './prompts.mjs';
 /** Durable capabilities are created only from canonical, consumed QQ input. */
-export function createDevelopment({config,state,store,getCoordinator,getCaller}: { config?: any; state?: any; store?: any; getCoordinator?: any; getCaller?: any; [key: string]: any }){
+export function createDevelopment({config,state,store,getCoordinator,getCaller,prompts=createHostPrompts()}: { prompts?: any; config?: any; state?: any; store?: any; getCoordinator?: any; getCaller?: any; [key: string]: any }){
  const controllers=new Map();
  function ownerSource(sessionId?: any){
   if(config.development?.enabled!==true)throw Error('Administrator development is disabled');
@@ -14,7 +15,7 @@ export function createDevelopment({config,state,store,getCoordinator,getCaller}:
   const event=ownerSource(sessionId);
   if(typeof prompt!=='string'||!prompt.trim()||prompt.length>5000)throw Error('Invalid development prompt');
   if(event.text.length>6000)throw Error('Administrator request too long; split into explicit requests');
-  const task=await getCoordinator().submit((getCaller?getCaller(sessionId):{sessionId,characterId:'fish',chatKey:event.channel,role:'qq'}), {requestId,development:true,prompt:`管理员要求：\n${event.text}\n任务摘要：\n${prompt}`});
+  const task=await getCoordinator().submit((getCaller?getCaller(sessionId):{sessionId,characterId:'fish',chatKey:event.channel,role:'qq'}), {requestId,development:true,prompt:prompts.render('task.develop-request',{request:String(event.text),summary:String(prompt)},{eventId:event.id,requestId,sessionId,channel:event.channel})});
   const previous=state.get('development-grant',task.id);
   if(previous){if(previous.eventId!==event.id||previous.ownerId!==event.actorId)throw Error('Development request source conflict');return task;}
   const grant={ticketId:task.id,eventId:event.id,ownerId:event.actorId,channel:event.channel,requestId,originalRequest:event.text,createdAt:new Date().toISOString()};
@@ -26,11 +27,11 @@ export function createDevelopment({config,state,store,getCoordinator,getCaller}:
   const grant=control(sessionId,ticketId);if(!grant)return perform(prompt);
   const event=ownerSource(sessionId);
   if(event.text.length>6000||typeof prompt!=='string'||prompt.length>3000)throw Error('Development follow-up too long');
-  const result=await perform(`管理员追加要求：\n${event.text}\n补充摘要：\n${prompt}`);
+  const result=await perform(prompts.render('task.develop-followup',{request:String(event.text),summary:String(prompt)},{eventId:event.id,sessionId,channel:event.channel}));
   const current=grantFor(ticketId),requests=current.authorizedRequests||[];
   if(!requests.some((r)=>r.eventId===event.id))state.put('development-grant',ticketId,{...current,authorizedRequests:[...requests,{eventId:event.id,ownerId:event.actorId,channel:event.channel,text:event.text}]});
   return result;
  }
- function resolveWorker(sessionId?: any){try{const grant=authorize(sessionId);const requests=grant.authorizedRequests||[];for(const request of requests){const event=store.get(request.eventId);if(!event||event.kind!=='message.received'||event.actorId!==grant.ownerId||event.channel!==grant.channel||event.text!==request.text)throw Error('Invalid owner follow-up source');}return {mode:'development',...grant,originalRequest:[grant.originalRequest,...requests.map((r)=>`管理员追加要求（${r.eventId}）：\n${r.text}`)].join('\n\n')};}catch{return {mode:'research'};}}
+ function resolveWorker(sessionId?: any){try{const grant=authorize(sessionId);const requests=grant.authorizedRequests||[];for(const request of requests){const event=store.get(request.eventId);if(!event||event.kind!=='message.received'||event.actorId!==grant.ownerId||event.channel!==grant.channel||event.text!==request.text)throw Error('Invalid owner follow-up source');}return {mode:'development',...grant,originalRequest:[grant.originalRequest,...requests.map((r)=>prompts.fragment('task.develop-authorized-followup',{eventId:String(r.eventId),request:String(r.text)}).text)].join('\n\n')};}catch{return {mode:'research'};}}
  return {ownerSource,authorize,control,develop,follow,revoke,signalFor,resolveWorker,close(){for(const controller of controllers.values())controller.abort();}};
 }

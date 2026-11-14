@@ -1,8 +1,9 @@
+import {createHostPrompts} from '../host/prompts.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 const missing = (error) => ['session/not-found','SESSION_QUERY_SESSION_NOT_FOUND'].includes(error?.code) || error?.name==='ApiSessionNotFound' || error?.constructor?.name==='ApiSessionNotFound';
-export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,getAgent=()=>null,onResult,onWorkspace,resolveWorker=()=>({mode:'research'})}: { controller?: any; workerRoot?: any; prepareWorkspace?: any; model?: any; getAgent?: (...args: any[]) => any; onResult?: any; onWorkspace?: any; resolveWorker?: (...args: any[]) => any; [key: string]: any }) {
+export function createDshExecutor({prompts=createHostPrompts(),controller,workerRoot,prepareWorkspace,model,getAgent=()=>null,onResult,onWorkspace,resolveWorker=()=>({mode:'research'})}: { prompts?: any; controller?: any; workerRoot?: any; prepareWorkspace?: any; model?: any; getAgent?: (...args: any[]) => any; onResult?: any; onWorkspace?: any; resolveWorker?: (...args: any[]) => any; [key: string]: any }) {
   const signal=new AbortController().signal;
   const admit=async(request?: any,deliverySignal?: any,isStillAuthorized?: any)=>{
     const revoked=()=>deliverySignal?.aborted||isStillAuthorized?.()===false;
@@ -52,11 +53,12 @@ export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,
       if(deliverySignal?.aborted || isStillAuthorized?.()===false)return {accepted:false};
 
       const trusted=resolveWorker(sessionId);
+      const source={sessionId,requestId:deliveryId};
       if(trusted.mode==='development')return admit({sessionId,requestId:deliveryId,mode:'queue',content:[{type:'text',text:
-        `【管理员要求】\n${trusted.originalRequest}\n【工作路径】\n代码：/opt/chopsticks\n配置：/var/lib/chopsticks/config.json\n角色与运行数据：/var/lib/chopsticks\n工作区：/root/workspace/dsh\nprojects/ 项目；notes/ 笔记；bili-watch/ 视频清单；scripts/ 脚本\n插件候选清单：/root/workspace/dsh/bili-watch/fish-dsh-plugins.csv\n【任务】\n${text}`
+        prompts.render('task.worker-development',{request:String(trusted.originalRequest),task:String(text)},source)
       }]},deliverySignal,isStillAuthorized);
       return admit({sessionId,requestId:deliveryId,mode:'queue',content:[{type:'text',text:
-        `【任务】\n${text}`
+        prompts.render('task.worker-research',{task:String(text)},source)
       }]},deliverySignal,isStillAuthorized);
     },
     async abort({sessionId}: { sessionId?: any; [key: string]: any }) {
@@ -77,7 +79,7 @@ export function createDshExecutor({controller,workerRoot,prepareWorkspace,model,
       // remain uncertain for the coordinator's receipt reconciliation.
       if(onResult)return onResult({sessionId,text,deliveryId,signal:deliverySignal,isStillAuthorized,ticketId,origin});
       return admit({sessionId,requestId:deliveryId,mode:'queue',content:[{type:'text',text:
-      `后台任务结果：\n${text}`
+      prompts.render('task.result-delivery',{result:String(text)},{sessionId,requestId:deliveryId})
     }]},deliverySignal,isStillAuthorized);
     },
   };

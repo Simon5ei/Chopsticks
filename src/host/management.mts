@@ -16,6 +16,9 @@ export function registerManagement(ctx?: any,contentObservations?: {recap:(scope
    ['/api/chopsticks/mood','mood.html','text/html'],
    ['/api/chopsticks/mood.js','mood.js','text/javascript'],
    ['/api/chopsticks/mood.css','mood.css','text/css'],
+   ['/api/chopsticks/prompts','prompts.html','text/html'],
+   ['/api/chopsticks/prompts.js','prompts.js','text/javascript'],
+   ['/api/chopsticks/prompts.css','prompts.css','text/css'],
   ]){
    const body=fs.readFileSync(new URL('../console/management/'+file,import.meta.url));
    disposers.push(host.connection.fetch.register({path:route,methods:['GET'],requestBody:'buffered',fetch:()=>new Response(body,{headers:{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; worker-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; object-src 'none'"}})}));

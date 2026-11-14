@@ -28,7 +28,7 @@ function copyTree(from:string,to:string,filter:(file:string)=>boolean){
 copyTree(path.join(root,'src'),path.join(dist,'src'),file=>! /\.(mts|ts|mjs|cjs|js)$/.test(file));
 // DSH and the owner-only management pages load classic scripts. TypeScript
 // checks each browser file as its own module; only its empty marker is erased.
-for(const file of ['client.js','management/layout.js','management/mood.js','management/pipeline.js','management/relationships.js']){
+for(const file of ['client.js','management/layout.js','management/mood.js','management/pipeline.js','management/prompts.js','management/relationships.js']){
  const target=path.join(dist,'src/console',file);
  const source=fs.readFileSync(target,'utf8').replace(/^export \{\};\r?\n/gm,'');
  if(/^\s*(?:import|export)\s/m.test(source))throw Error('Browser assets must remain classic scripts');

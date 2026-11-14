@@ -56,7 +56,8 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
      !browseTools.has(exec.name))return '本轮仅允许浏览和保存私有感想';
  }));
  disposers.push(ctx.tools.guard((exec)=>{if(runtime.layered&&exec.name.startsWith('mcp__cul__')){let caller;try{caller=nativeDesktop.caller(exec.agent.session.id)||who(exec);}catch{return '桌面操作没有活动来源';}if(!runtime.desktopLease.claim(caller))return '桌面正由另一轮活动使用';}}));
- const add=(name?: any,description?: any,parameters?: any,execute?: any)=>disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute})));
+ // Tool descriptions are prompt text too; each registered tool is listed in the prompt registry.
+ const add=(name?: any,description?: any,parameters?: any,execute?: any)=>{runtime.listTool?.({name,description,parameters,source:'src/host/index.mts'});return disposers.push(ctx.tools.register(host.defineTool({name,description,parameters,output:{schema:{type:'json'},render:(_a?: any,v?: any)=>[{type:'text',text:JSON.stringify(v)}]},execute})));};
  const source=(exec)=>{const c=who(exec);if(c.role==='worker')throw Error('Workers cannot control other tasks');return c;};
  const contextSource=(exec?: any,eventId?: any)=>runtime.contextCaller(exec.agent.session.id,eventId);
  add('chopsticks_context_search','检索近期2048条授权经历的前4096字，返回来源引用。',{query:str('检索词',true),limit:{type:'number'},eventId:str('Router本轮来源事件 ID')},(a?: any,e?: any)=>runtime.contextService.search(contextSource(e,a.eventId),{query:a.query,limit:a.limit}));
@@ -102,6 +103,7 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
   add('chopsticks_reminder_cancel','取消当前来源发信人设置的提醒。',{id:str('提醒 ID',true)},(a?: any,e?: any)=>runtime.reminders.cancel(source(e),a.id));
  }
  for(const tool of maiTools){
+  runtime.listTool?.({name:tool.name,description:tool.description,parameters:tool.inputSchema,source:'src/maibot/bridge.mts'});
   disposers.push(ctx.tools.register(mcp.createMcpToolDefinition(ctx,{name:tool.name,rawName:tool.rawName,description:tool.description,inputSchema:tool.inputSchema,async call(args?: any,exec?: any){
    const caller=who(exec);const value=runtime.telemetry.clean(await maiBot.call(tool.name,args,exec.signal));
    const text=JSON.stringify(value).slice(0,30000);
@@ -110,9 +112,11 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
   }})));
  }
  for(const [name,fn,description]of [['chopsticks_image','getImage','读取当前会话收到的图片。'],['chopsticks_forward','getForward','读取本会话实际收到的合并转发。']]){
+  runtime.listTool?.({name,description,source:'src/host/index.mts'});
   disposers.push(ctx.tools.register(mcp.createMcpToolDefinition(ctx,{name,rawName:name,description,inputSchema:{type:'object',properties:{messageId:{type:'string'}},required:['messageId'],additionalProperties:false},async call(args?: any,exec?: any){const c=who(exec);const result=await runtime.adapter[fn]({channel:c.channel,messageId:args.messageId});return result.content?result:{content:[{type:'text',text:JSON.stringify(result)}]};}})));
  }
  for(const tool of bili.listTools()){
+  runtime.listTool?.({name:`mcp__bilibili__${tool.name}`,description:tool.description,parameters:tool.inputSchema,source:'src/bili/mcp/service.mts'});
   disposers.push(ctx.tools.register(mcp.createMcpToolDefinition(ctx,{name:`mcp__bilibili__${tool.name}`,rawName:tool.name,description:tool.description,inputSchema:tool.inputSchema,async call(args?: any,exec?: any){
    const caller=who(exec);
    if(runtime.layered){
@@ -157,7 +161,7 @@ export function createHostApply({lifePlatforms={},adapterFactory,socialFactory,f
   let caller;try{caller=runtime.caller(agent?.session?.id);}catch{return typeof next==='function'?next():assembly;}
   const result=typeof next==='function'?await next():assembly;
   if(['evolution','diary'].includes(caller.role))return result;
-  const channel=caller.channel||caller.chatKey;const fresh=liveConversationContext(runtime,channel);
+  const channel=caller.channel||caller.chatKey;const fresh=liveConversationContext(runtime,channel);runtime.recordContext?.(agent.session.id,channel,fresh.fragment);
   result.contexts=(result.contexts||[]).filter((c)=>!['chopsticks-live','chopsticks-tasks'].includes(c.name));
   result.contexts.push({name:'chopsticks-live',order:500,text:fresh.text,interpolate:false});
   if(runtime.contextService){
